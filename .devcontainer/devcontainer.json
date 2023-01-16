@@ -3,7 +3,21 @@
 {
 	"name": "Python 3",
 	// Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
-	"image": "mcr.microsoft.com/devcontainers/python:0-3.10",
+	"build": {
+		"dockerfile": "Dockerfile",
+		"context": "."
+	},
+
+	"containerEnv": {
+		"TZ": "UTC"
+	},
+
+	"runArgs": ["--gpus", "all"],
+
+	"mounts": [
+		"source=/tmp/.X11-unix/X0,target=/tmp/.X11-unix/X0,type=bind",
+		"source=cuda-12-python-9-cache,target=/home/vscode/.cache,type=volume"
+	],
 
 	// Features to add to the dev container. More info: https://containers.dev/features.
 	// "features": {},
@@ -12,11 +26,15 @@
 	// "forwardPorts": [],
 
 	// Use 'postCreateCommand' to run commands after the container is created.
-	"postCreateCommand": "pip3 install --user -r .devcontainer/requirements.txt"
+	// "postCreateCommand": "pip3 install --user -r .devcontainer/requirements.txt"
 
 	// Configure tool-specific properties.
 	// "customizations": {},
+	"extensions": [
+		"ms-python.python",
+		"ms-python.vscode-pylance"
+	],
 
 	// Uncomment to connect as root instead. More info: https://aka.ms/dev-containers-non-root.
-	// "remoteUser": "root"
+	"remoteUser": "vscode"
 }
