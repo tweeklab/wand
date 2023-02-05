@@ -1,0 +1,1 @@
+#define CV_INT32_T_IS_LONG_INT
