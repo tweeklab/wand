@@ -6,17 +6,10 @@ import cv2
 from time import time, sleep
 import collections
 import itertools
-from concurrent.futures import ThreadPoolExecutor
-import colorsys
 import tensorflow as tf
 from typing import NamedTuple
 import os
 import uuid
-
-# initialize the camera and grab a reference to the raw camera capture
-w = 400
-h = 400
-camera = PiCamera(sensor_mode=4, framerate=30, resolution=(w, h))
 
 reverse_label_map = {
     0: "arresto-momentum",
@@ -66,20 +59,15 @@ def load_model():
     )
 
 
-detector_pass1 = create_pass1_detector()
-detect_queue_pass1 = deque(maxlen=100)
-global_losers = None
+def setup_camera():
+    w = 400
+    h = 400
+    camera = PiCamera(sensor_mode=4, framerate=30, resolution=(w, h))
+    rawCapture = PiRGBArray(camera, size=(w, h))
+    # allow the camera to warmup
+    sleep(1)
 
-model_info = load_model()
-
-rawCapture = PiRGBArray(camera, size=(w, h))
-# allow the camera to warmup
-sleep(1)
-
-dumpf = open("points.txt", "w")
-
-i = 0
-frame_count = 0
+    return (camera, rawCapture)
 
 
 def displacement(v0, v1):
@@ -88,26 +76,17 @@ def displacement(v0, v1):
     return disp
 
 
-loser_bin = collections.Counter()
-loser_timestamps = {}
-loser_bin_evictions_counter = 0
-loser_bin_stats_counter = 0
-
-clear_reason = ""
-dwell_timer = 0
-
 def render(raw_data_grouped):
     global clear_reason
     global dwell_timer
+    global loser_bin_evictions_counter
+    global loser_bin_stats_counter
+    global detect_queue_pass1
     ##### PASTE
     min_frame = raw_data_grouped[0][0][2]
     filtered_frames = []
     frame_q = collections.deque(maxlen=5)
     bin_size = 20
-    x = []
-    y = []
-
-    start_ts = time()
 
     def append_frame(f):
         if len(filtered_frames) > 0 and filtered_frames[-1][0] == f[0]:
@@ -115,9 +94,9 @@ def render(raw_data_grouped):
         filtered_frames.append(f)
 
     def is_loser(pt):
+        global loser_bin_evictions_counter
         ret = (int(pt[0][0] / bin_size), int(pt[0][1] / bin_size)) in loser_bin
         if ret:
-            global loser_bin_evictions_counter
             loser_bin_evictions_counter += 1
         return ret
 
@@ -203,15 +182,12 @@ def render(raw_data_grouped):
                     add_loser(pt)
             append_frame(new_point)
 
-    global loser_bin_stats_counter
     loser_bin_stats_counter += 1
     if (loser_bin_stats_counter % 30) == 0:
         print(f"loser bin: {loser_bin_evictions_counter}")
     trim_losers()
-    # print(f"{time()-start_ts}")
     ##### PASTE END
 
-    global detect_queue_pass1
     if len(filtered_frames) >= 10:
         # Test for motion
         strides = np.array(
@@ -225,7 +201,6 @@ def render(raw_data_grouped):
         if total_dist > 10:
             dwell_timer = 0
             return
-        
 
         xmax = max([frame[0][0] for frame in filtered_frames])
         ymax = max([frame[0][1] for frame in filtered_frames])
@@ -293,9 +268,7 @@ def render(raw_data_grouped):
         ]
         pred_max = np.max(output_data)
         pred_argmax = np.argmax(output_data)
-        # if pred_max > 200 and reverse_label_map[pred_argmax] != 'crap':
-        if True:
-            print(f"pred: {pred_argmax} ({reverse_label_map[pred_argmax]}): {pred_max}")
+        print(f"pred: {pred_argmax} ({reverse_label_map[pred_argmax]}): {pred_max}")
 
         label_image = np.zeros((200, 400), dtype=np.uint8)
         cv2.putText(
@@ -312,85 +285,34 @@ def render(raw_data_grouped):
         outfiledir = os.path.join("captures", reverse_label_map[pred_argmax])
         outfilename = os.path.join(outfiledir, f"{uuid.uuid4()}.png")
         os.makedirs(outfiledir, exist_ok=True)
-        # print(f"write {outfilename} ({np.count_nonzero(disp_process_image[(disp_process_image!=0) & (disp_process_image!=255)])})")
         cv2.imwrite(filename=outfilename, img=disp_process_image)
-        # print(f"Execution time: {time() - start_ts}")
-
-        # raw_output_image = np.zeros((400, 450, 3), dtype=np.uint8)
-        # # prev_x = None
-        # # prev_y = None
-        # # for frame in [(p[0], p[1]) for frame in raw_data_grouped for p in frame]:
-        # #     if prev_x is None or prev_y is None:
-        # #         prev_x = frame[0]
-        # #         prev_y = frame[1]
-        # #         continue
-        # #     start = (prev_x, prev_y)
-        # #     end = (frame[0], frame[1])
-        # #     cv2.line(raw_output_image, start, end, color=(255, 255, 255), thickness=3)
-        # #     prev_x = end[0]
-        # #     prev_y = end[1]
-
-        # for i in range(255):
-        #     color = np.array(colorsys.hsv_to_rgb(i / 255, 1, 1)) * 255
-        #     color = color.astype(np.uint8).tolist()
-        #     cv2.rectangle(
-        #         raw_output_image,
-        #         (445, 399 - ((2 * i) + 1)),
-        #         (449, 399 - ((2 * i))),
-        #         color=color,
-        #         thickness=-1,
-        #     )
-        #     cv2.putText(
-        #         raw_output_image,
-        #         "255",
-        #         (400, 20),
-        #         cv2.FONT_HERSHEY_SIMPLEX,
-        #         0.5,
-        #         (255, 255, 255),
-        #         1,
-        #     )
-        #     cv2.putText(
-        #         raw_output_image,
-        #         "1",
-        #         (425, 390),
-        #         cv2.FONT_HERSHEY_SIMPLEX,
-        #         0.5,
-        #         (255, 255, 255),
-        #         1,
-        #     )
-
-        # for frame in [(p[0], p[1], v) for p, v in loser_bin.items()]:
-        #     if frame[2] < 255:
-        #         color = np.array(colorsys.hsv_to_rgb(frame[2] / 255, 1, 1)) * 255
-        #     else:
-        #         color = np.array(colorsys.hsv_to_rgb(1, 1, 1)) * 255
-        #     color = color.astype(np.uint8).tolist()
-        #     cv2.rectangle(
-        #         raw_output_image,
-        #         (frame[0] * bin_size, frame[1] * bin_size),
-        #         (
-        #             int((frame[0] * bin_size) + bin_size),
-        #             int((frame[1] * bin_size) + bin_size),
-        #         ),
-        #         color=color,
-        #         thickness=-1,
-        #     )
-
-        # cv2.imshow("Raw", raw_output_image)
 
         clear_reason = "inference"
         detect_queue_pass1.clear()
 
-
-executor = ThreadPoolExecutor(max_workers=1)
 
 def is_global_loser(kp):
     bin_size = 20
     ret = (int(kp.pt[0] / bin_size), int(kp.pt[1] / bin_size)) in loser_bin
     return ret
 
-# capture frames from the camera
+
+detector_pass1 = create_pass1_detector()
+detect_queue_pass1 = deque(maxlen=100)
+global_losers = None
+model_info = load_model()
+camera, rawCapture = setup_camera()
+i = 0
+frame_count = 0
+loser_bin = collections.Counter()
+loser_timestamps = {}
+loser_bin_evictions_counter = 0
+loser_bin_stats_counter = 0
+clear_reason = ""
+dwell_timer = 0
 miss_counter = 0
+
+
 for frame in camera.capture_continuous(rawCapture, format="bgr", use_video_port=True):
     image_pass1 = cv2.cvtColor(cv2.flip(frame.array, 1), cv2.COLOR_BGR2GRAY)
     raw_points_image = np.zeros((400, 400, 3), dtype=np.uint8)
@@ -448,7 +370,6 @@ for frame in camera.capture_continuous(rawCapture, format="bgr", use_video_port=
     i += 1
     if i == 10:
         if len(detect_queue_pass1) > 0:
-            # executor.submit(render, detect_queue_pass1)
             render(detect_queue_pass1)
         i = 0
 

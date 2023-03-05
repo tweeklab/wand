@@ -1,14 +1,18 @@
 #include <stdio.h>
 #include <cstring>
+#include <vector>
 #include "esp_camera.h"
 #include "esp_timer.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
-#include "img_converters.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "opencv_import.hpp"
+// #include "opencv_import.hpp"
 #include "wifi.h"
+#include "JPEGDEC.h"
+#include "blob_rect.hpp"
+#include <sys/socket.h>
+#include <netdb.h>            // struct addrinfo
 
 #define PWDN_GPIO_NUM     32
 #define RESET_GPIO_NUM    -1
@@ -33,70 +37,76 @@
 static const char *TAG = "wand";
 
 uint8_t *out = NULL;
+JPEGDEC jpeg;
+
+#define OUT_BUFLEN 1024
+
+#define HOST_IP "10.0.0.30"
+#define PORT 3333
+static int do_connect(void)
+{
+        const char *host_ip = HOST_IP;
+        struct sockaddr_in dest_addr;
+        inet_pton(AF_INET, host_ip, &dest_addr.sin_addr);
+        dest_addr.sin_family = AF_INET;
+        dest_addr.sin_port = htons(PORT);
+
+        int sock =  socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
+        if (sock < 0) {
+            ESP_LOGE(TAG, "Unable to create socket: errno %d", errno);
+            return -1;
+        }
+        ESP_LOGI(TAG, "Socket created, connecting to %s:%d", host_ip, PORT);
+
+        int err = connect(sock, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
+        if (err != 0) {
+            ESP_LOGE(TAG, "Socket unable to connect: errno %d", errno);
+            return -1;
+        }
+
+        int val = 1;
+        setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &val, sizeof(val));
+        
+        ESP_LOGI(TAG, "Successfully connected");
+
+        return sock;
+}
 
 typedef struct {
-        uint16_t width;
-        uint16_t height;
-        uint16_t data_offset;
-        const uint8_t *input;
-        uint8_t *output;
-} my_rgb_jpg_decoder;
+    int height;
+    int width;
+    std::vector<Point> zero_points;
+} user_data_t;
 
-//input buffer
-static size_t  _my_jpg_read(void * arg, size_t index, uint8_t *buf, size_t len)
+int drawMCUs(JPEGDRAW *pDraw)
 {
-    my_rgb_jpg_decoder * jpeg = (my_rgb_jpg_decoder *)arg;
-    if(buf) {
-        memcpy(buf, jpeg->input + index, len);
-    }
-    return len;
-}
+    uint8_t *pIn = (uint8_t *)pDraw->pPixels;
+    user_data_t *user = (user_data_t *)pDraw->pUser;
+    uint8_t pixel;
 
-static bool _my_rgb_write(void * arg, uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint8_t *data)
-{
-    my_rgb_jpg_decoder * jpeg = (my_rgb_jpg_decoder *)arg;
-    if(!data){
-        if(x == 0 && y == 0){
-            //write start
-            jpeg->width = w;
-            jpeg->height = h;
-        } else {
-            //write end
+    int top = pDraw->y * user->height;
+    int bottom = top + (pDraw->iHeight * user->height);
+
+    for (int y = top; y < bottom; y+=user->height) {
+        for (int x = 0; x < pDraw->iWidth; x++) {
+            pixel = (pIn[x] > 30 ? 255 : 0);
+            if (pixel == 0) {
+                user->zero_points.push_back(Point(pDraw->x + x, y/user->height));
+            }
         }
-        return true;
+        pIn += pDraw->iWidth;
     }
-
-    size_t jw = jpeg->width;
-    size_t t = y * jw;
-    size_t b = t + (h * jw);
-    size_t l = x;
-    uint8_t *out = jpeg->output+jpeg->data_offset;
-    uint8_t *o = out;
-    size_t iy, ix;
-
-    w = w;
-
-    for(iy=t; iy<b; iy+=jw) {
-        o = out+iy+l;
-        for(ix=0; ix<w; ix+=1) {
-            o[ix] = data[ix];
-            // o[ix] = (data[ix+2] + data[ix+1] + data[ix])/3;
-            // if (o[ix] > 100)
-            //     o[ix] = 255;
-            // else
-            //     o[ix] = 0;
-        }
-        data+=w;
-    }
-    return true;
+    return 1;
 }
-
 
 extern "C" void app_main(void)
 {
     camera_config_t config;
     camera_fb_t *fb = NULL;
     int i = 0;
+    user_data_t userdata;
+    std::vector<Point> centers;
+    std::vector<Rect> rects;
 
     config.ledc_channel = LEDC_CHANNEL_0;
     config.ledc_timer = LEDC_TIMER_0;
@@ -117,11 +127,11 @@ extern "C" void app_main(void)
     config.pin_pwdn = PWDN_GPIO_NUM;
     config.pin_reset = RESET_GPIO_NUM;
     config.xclk_freq_hz = 20000000;
-    config.frame_size = FRAMESIZE_QCIF;
+    config.frame_size = FRAMESIZE_CIF;
     config.pixel_format = PIXFORMAT_JPEG;
     config.grab_mode = CAMERA_GRAB_LATEST;
     config.fb_location = CAMERA_FB_IN_PSRAM;
-    config.jpeg_quality = 8;
+    config.jpeg_quality = 24;
     config.fb_count = 2;
 
     esp_err_t err = esp_camera_init(&config);
@@ -131,6 +141,9 @@ extern "C" void app_main(void)
     }
     sensor_t * s = esp_camera_sensor_get();
     ESP_LOGI(TAG, "Past camera init, PID is 0x%0X", s->id.PID);
+    // s->set_vflip(s, 1);
+    s->set_hmirror(s, 1);
+    s->set_special_effect(s, 1);
 
     //Initialize NVS
     esp_err_t ret = nvs_flash_init();
@@ -141,33 +154,43 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(ret);
 
     wifi_init_sta();
+    int sock = do_connect();
 
-    ESP_LOGI(TAG, "ESP_WIFI_MODE_STA");
-
-    // out = (uint8_t*) heap_caps_malloc(176*144, (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    out = (uint8_t*) heap_caps_malloc(176*144, (MALLOC_CAP_8BIT));
-    my_rgb_jpg_decoder jpeg;
+    out = (uint8_t *)heap_caps_malloc(OUT_BUFLEN, (MALLOC_CAP_8BIT));
 
     while(1) {
-        // vTaskDelay(1000 / portTICK_PERIOD_MS);
+        uint64_t fr_start = esp_timer_get_time();
         fb = esp_camera_fb_get();
 
-        jpeg.width = 0;
-        jpeg.height = 0;
-        jpeg.input = fb->buf;
-        jpeg.output = out;
-        jpeg.data_offset = 0;
-
-        uint64_t fr_start = esp_timer_get_time();
-        if(esp_jpg_decode(fb->len, JPG_SCALE_NONE, _my_jpg_read, _my_rgb_write, (void*)&jpeg) != ESP_OK){
-            ESP_LOGW(TAG, "jped decode fail");
-        }
-        opencv_func(out);
-        i++;
+        jpeg.openRAM((uint8_t *)fb->buf, fb->len, drawMCUs);
+        jpeg.setPixelType(EIGHT_BIT_GRAYSCALE);
+        userdata.width = jpeg.getWidth();
+        userdata.height = jpeg.getHeight();
+        userdata.zero_points.clear();
+        jpeg.setUserPointer(&userdata);
+        jpeg.decode(0,0,0);
 
         uint64_t fr_end = esp_timer_get_time();
-        if (!(i%30))
-            ESP_LOGI(TAG, "Time: %llu. %d (%d, %d)", fr_end - fr_start, fb->len, jpeg.width, jpeg.height);
+        i++;
+
+        findBlobRects(userdata.zero_points, rects);
+
+        size_t sendlen;
+        sendlen = snprintf((char *)out, OUT_BUFLEN, "[%d%s", i, rects.size() > 0 ? "," : "");
+        for (size_t i = 0; i < rects.size(); i++) {
+            Point center = rects[i].center();
+            sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "[%d, %d]", center.x, center.y);
+            if (i < rects.size() - 1) {
+                sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, ",");
+            }
+        }
+        sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "]\n");
+
+        ssize_t r = send(sock, out, sendlen, 0);
+        if (!(i%30)) {
+            ESP_LOGI(TAG, "Time: %llu. %d (%d, %d - %d - %d) - %d", fr_end - fr_start, fb->len, jpeg.getWidth(), jpeg.getHeight(), userdata.zero_points.size(), userdata.zero_points.capacity(), r);
+        }
+        jpeg.close();
         esp_camera_fb_return(fb);
     }
 }
