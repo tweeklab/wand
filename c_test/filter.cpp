@@ -44,10 +44,13 @@ namespace std
 class PointBin {
     public:
         map<Point, time_t> bin;
+        map<Point, int> bin_count;
         int bin_size;
+        int bin_threshold;
 
-        PointBin(int bin_size):
-            bin_size(bin_size) {};
+        PointBin(int bin_size, int bin_threshold):
+            bin_size(bin_size),
+            bin_threshold(bin_threshold) {};
         inline Point bin_point(Point pt) {
             return Point(pt.x/bin_size, pt.y/bin_size);
         }
@@ -58,14 +61,22 @@ class PointBin {
 };
 
 bool PointBin::contains(Point pt) {
-    return bin.count(bin_point(pt)) > 0;
+    if (bin.count(bin_point(pt)) > 0) {
+        bin[bin_point(pt)] = time(NULL);
+        if (bin_count[bin_point(pt)] > bin_threshold) {
+            return true;
+        }
+    }
+    return false;
 }
 
 void PointBin::add(Point pt) {
     bin[bin_point(pt)] = time(NULL);
+    bin_count[bin_point(pt)]++;
 }
 
 bool PointBin::remove(Point pt) {
+    bin_count.erase(bin_point(pt));
     return (bin.erase(bin_point(pt)) > 0);
 }
 
@@ -79,6 +90,7 @@ int PointBin::prune(int expire_seconds) {
     }
     for (auto it = old_points.begin(); it != old_points.end(); it++) {
         bin.erase(*it);
+        bin_count.erase(*it);
     }
     return old_points.size();
 }
@@ -145,7 +157,7 @@ deque<vector<Point>> detect_queue;
 int idle_counter;
 int frame_counter;
 filter_state_t filter_state;
-PointBin loser_bin(LOSER_BIN_BINSIZE);
+PointBin loser_bin(LOSER_BIN_BINSIZE, 10);
 
 // Bound by FILTER_QUEUE_SIZE
 deque<vector<Point>> filter_queue; // Recent frames
@@ -159,17 +171,24 @@ void append_to_path_point_queue(Point pt) {
 
 void filter() {
     int min_sum = INT32_MAX;
-    vector<Point> winner_points;
-    Point winner;
     int winner_sum = 0;
+    vector<Point> winner_points;
+    Point winner(-1, -1);
     // Build test grids
     for (auto it1 = filter_queue[0].begin(); it1 != filter_queue[0].end(); it1++) {
+        if (loser_bin.contains(*it1))
+            continue;
         for (auto it2 = filter_queue[1].begin(); it2 != filter_queue[1].end(); it2++) {
+            if (loser_bin.contains(*it2))
+                continue;
             for (auto it3 = filter_queue[2].begin(); it3 != filter_queue[2].end(); it3++) {
+                if (loser_bin.contains(*it3))
+                    continue;
                 Point v0 = *it1 - path_point_queue.back();
                 Point v1 = *it2 - *it1;
                 Point v2 = *it3 - *it2;
                 if (*it1 == path_point_queue.back() || *it1 == *it2 || *it2 == *it3) {
+                    loser_bin.add(*it1);
                     continue;
                 }
                 int angle1 = atan2_lut(det(v0, v1), dot(v0, v1));
@@ -184,8 +203,9 @@ void filter() {
             }
         }
     }
-    append_to_path_point_queue(winner);
-    cout << "Winner: [[" << winner_points[0] << ", " << winner_points[1] << ", " << winner_points[2] << ", " << winner_points[3] << "]] - " << winner << " (" << winner_sum << ")" << endl;
+    if (winner.x > 0 && winner.y > 0) {
+        append_to_path_point_queue(winner);
+    }
     for (auto it1 = filter_queue[0].begin(); it1 != filter_queue[0].end(); it1++) {
         if (*it1 != winner) {
             loser_bin.add(*it1);
@@ -194,7 +214,18 @@ void filter() {
 }
 
 void process_single_frame(vector<Point> frame) {
-    bounded_deque_push_back(filter_queue, frame, FILTER_QUEUE_SIZE);
+    // Yeah the frames are filtered when the first come in to
+    // handle_incoming_frame, but each time we run the detect
+    // queue it's better to apply current knowledge of losers
+    // to all frames in the queue that came in earlier.
+    vector<Point> tmp_pts;
+    for (auto pit = frame.begin(); pit < frame.end(); pit++) {
+        if (!loser_bin.contains(*pit)) {
+            tmp_pts.push_back(*pit);
+        }
+    }
+
+    bounded_deque_push_back(filter_queue, tmp_pts, FILTER_QUEUE_SIZE);
     // Need all 3 frames in the queue to vote on a good point
     if (filter_queue.size() != 3) {
         return;
@@ -209,6 +240,7 @@ void process_single_frame(vector<Point> frame) {
         } else {
             Point random_point;
             random_point = filter_queue[0][rand() % filter_queue[0].size()];
+            cout << "Random point: " << random_point << endl;
             append_to_path_point_queue(random_point);
         }
     }
@@ -236,10 +268,11 @@ void handle_incoming_frame(vector<Point> frame) {
     }
 
     if ((++frame_counter % FRAME_QUEUE_HW_MARK) == 0) {
+        path_point_queue.clear();
         for (auto fit = detect_queue.begin(); fit != detect_queue.end(); fit++) {
             process_single_frame(*fit);
         }
-        detect_queue.clear();
+        filter_queue.clear();
     }
 }
 
@@ -268,8 +301,14 @@ int main() {
     for (auto it = path_point_queue.begin(); it != path_point_queue.end(); it++) {
         cout << *it << "," << endl;
     }
+    // cout << "==============" << endl;
+    // for (auto it = loser_bin.bin_count.begin(); it != loser_bin.bin_count.end(); it++) {
+    //     cout << it->first * loser_bin.bin_size << " " << it->second << endl;
+    // }
     cout << "==============" << endl;
     for (auto it = loser_bin.bin.begin(); it != loser_bin.bin.end(); it++) {
+        if (loser_bin.bin_count[it->first] < loser_bin.bin_threshold)
+            continue;
         cout << it->first * loser_bin.bin_size << "," << endl;
     }
 
