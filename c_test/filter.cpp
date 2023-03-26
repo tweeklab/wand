@@ -20,6 +20,8 @@ using namespace std;
 #define LOSER_BIN_BINSIZE 20
 #define LOSER_BIN_LIFETIME_SECONDS 30
 
+#define LOSER_BIN_HALFBIN (LOSER_BIN_BINSIZE / 2)
+
 using namespace std;
 
 typedef enum {
@@ -52,7 +54,27 @@ class PointBin {
             bin_size(bin_size),
             bin_threshold(bin_threshold) {};
         inline Point bin_point(Point pt) {
-            return Point(pt.x/bin_size, pt.y/bin_size);
+            // return Point(pt.x/bin_size, pt.y/bin_size);
+            int halfbin_x = (pt.x / LOSER_BIN_HALFBIN) * LOSER_BIN_HALFBIN;
+            int halfbin_y = (pt.y / LOSER_BIN_HALFBIN) * LOSER_BIN_HALFBIN;
+            int bin_x = (pt.x/bin_size) * LOSER_BIN_BINSIZE;
+            int bin_y = (pt.y/bin_size) * LOSER_BIN_BINSIZE;
+
+            int final_x, final_y;
+
+            if ((halfbin_x - bin_x) < LOSER_BIN_HALFBIN) {
+                final_x = bin_x;
+            } else {
+                final_x = bin_x + 20;
+            }
+
+            if ((halfbin_y - bin_y) < LOSER_BIN_HALFBIN) {
+                final_y = bin_y;
+            } else {
+                final_y = bin_y + 20;
+            }
+
+            return Point(final_x/bin_size, final_y/bin_size);
         }
         bool contains(Point);
         void add(Point);
@@ -224,6 +246,9 @@ void process_single_frame(vector<Point> frame) {
             tmp_pts.push_back(*pit);
         }
     }
+    if (tmp_pts.size() == 0) {
+        return;
+    }
 
     bounded_deque_push_back(filter_queue, tmp_pts, FILTER_QUEUE_SIZE);
     // Need all 3 frames in the queue to vote on a good point
@@ -240,7 +265,6 @@ void process_single_frame(vector<Point> frame) {
         } else {
             Point random_point;
             random_point = filter_queue[0][rand() % filter_queue[0].size()];
-            cout << "Random point: " << random_point << endl;
             append_to_path_point_queue(random_point);
         }
     }
@@ -314,3 +338,10 @@ int main() {
 
     return 0;
 }
+
+// int main() {
+//     cout << loser_bin.bin_point(Point(30,30)) << endl;
+//     cout << loser_bin.bin_point(Point(31,31)) << endl;
+//     cout << loser_bin.bin_point(Point(29,29)) << endl;
+//     return 0;
+// }
