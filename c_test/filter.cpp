@@ -293,10 +293,10 @@ void handle_incoming_frame(vector<Point> frame) {
 
     if ((++frame_counter % FRAME_QUEUE_HW_MARK) == 0) {
         path_point_queue.clear();
+        filter_queue.clear();
         for (auto fit = detect_queue.begin(); fit != detect_queue.end(); fit++) {
             process_single_frame(*fit);
         }
-        filter_queue.clear();
     }
 }
 
