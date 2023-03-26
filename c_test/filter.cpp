@@ -20,8 +20,6 @@ using namespace std;
 #define LOSER_BIN_BINSIZE 20
 #define LOSER_BIN_LIFETIME_SECONDS 30
 
-#define LOSER_BIN_HALFBIN (LOSER_BIN_BINSIZE / 2)
-
 using namespace std;
 
 typedef enum {
@@ -48,30 +46,32 @@ class PointBin {
         map<Point, time_t> bin;
         map<Point, int> bin_count;
         int bin_size;
+        int half_bin_size;
         int bin_threshold;
 
         PointBin(int bin_size, int bin_threshold):
             bin_size(bin_size),
-            bin_threshold(bin_threshold) {};
+            bin_threshold(bin_threshold),
+            half_bin_size(bin_size/2) {};
         inline Point bin_point(Point pt) {
             // return Point(pt.x/bin_size, pt.y/bin_size);
-            int halfbin_x = (pt.x / LOSER_BIN_HALFBIN) * LOSER_BIN_HALFBIN;
-            int halfbin_y = (pt.y / LOSER_BIN_HALFBIN) * LOSER_BIN_HALFBIN;
-            int bin_x = (pt.x/bin_size) * LOSER_BIN_BINSIZE;
-            int bin_y = (pt.y/bin_size) * LOSER_BIN_BINSIZE;
+            int halfbin_x = (pt.x / half_bin_size) * half_bin_size;
+            int halfbin_y = (pt.y / half_bin_size) * half_bin_size;
+            int bin_x = (pt.x/bin_size) * bin_size;
+            int bin_y = (pt.y/bin_size) * bin_size;
 
             int final_x, final_y;
 
-            if ((halfbin_x - bin_x) < LOSER_BIN_HALFBIN) {
+            if ((halfbin_x - bin_x) < half_bin_size) {
                 final_x = bin_x;
             } else {
-                final_x = bin_x + 20;
+                final_x = bin_x + bin_size;
             }
 
-            if ((halfbin_y - bin_y) < LOSER_BIN_HALFBIN) {
+            if ((halfbin_y - bin_y) < half_bin_size) {
                 final_y = bin_y;
             } else {
-                final_y = bin_y + 20;
+                final_y = bin_y + bin_size;
             }
 
             return Point(final_x/bin_size, final_y/bin_size);
