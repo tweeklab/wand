@@ -1,6 +1,5 @@
 #include <iostream>
 #include <vector>
-#include <map>
 #include <chrono>
 #include <deque>
 #include <algorithm>
@@ -8,6 +7,7 @@
 #include <unistd.h>
 
 #include "blob_rect.hpp"
+#include "point.hpp"
 #include "test_frames.hpp"
 #include "atan_lut.hpp"
 
@@ -25,97 +25,6 @@ using namespace std;
 typedef enum {
     IDLE
 } filter_state_t;
-
-namespace std
-{
-    template<> struct less<Point>
-    {
-        bool operator() (const Point& lhs, const Point& rhs) const
-        {
-            if (lhs.y < rhs.y)
-                return true;
-            if ((lhs.y == rhs.y) & (lhs.x < rhs.x))
-                return true;
-            return false;
-        }
-    };
-}
-
-class PointBin {
-    public:
-        map<Point, time_t> bin;
-        map<Point, int> bin_count;
-        int bin_size;
-        int half_bin_size;
-        int bin_threshold;
-
-        PointBin(int bin_size, int bin_threshold):
-            bin_size(bin_size),
-            bin_threshold(bin_threshold),
-            half_bin_size(bin_size/2) {};
-        inline Point bin_point(Point pt) {
-            // return Point(pt.x/bin_size, pt.y/bin_size);
-            int halfbin_x = (pt.x / half_bin_size) * half_bin_size;
-            int halfbin_y = (pt.y / half_bin_size) * half_bin_size;
-            int bin_x = (pt.x/bin_size) * bin_size;
-            int bin_y = (pt.y/bin_size) * bin_size;
-
-            int final_x, final_y;
-
-            if ((halfbin_x - bin_x) < half_bin_size) {
-                final_x = bin_x;
-            } else {
-                final_x = bin_x + bin_size;
-            }
-
-            if ((halfbin_y - bin_y) < half_bin_size) {
-                final_y = bin_y;
-            } else {
-                final_y = bin_y + bin_size;
-            }
-
-            return Point(final_x/bin_size, final_y/bin_size);
-        }
-        bool contains(Point);
-        void add(Point);
-        bool remove(Point);
-        int prune(int);
-};
-
-bool PointBin::contains(Point pt) {
-    if (bin.count(bin_point(pt)) > 0) {
-        bin[bin_point(pt)] = time(NULL);
-        if (bin_count[bin_point(pt)] > bin_threshold) {
-            return true;
-        }
-    }
-    return false;
-}
-
-void PointBin::add(Point pt) {
-    bin[bin_point(pt)] = time(NULL);
-    bin_count[bin_point(pt)]++;
-}
-
-bool PointBin::remove(Point pt) {
-    bin_count.erase(bin_point(pt));
-    return (bin.erase(bin_point(pt)) > 0);
-}
-
-int PointBin::prune(int expire_seconds) {
-    vector<Point> old_points;
-    int cutoff_time = time(NULL) - expire_seconds;
-    for (auto it = bin.begin(); it != bin.end(); it++) {
-        if (it->second < cutoff_time) {
-            old_points.push_back(it->first);
-        }
-    }
-    for (auto it = old_points.begin(); it != old_points.end(); it++) {
-        bin.erase(*it);
-        bin_count.erase(*it);
-    }
-    return old_points.size();
-}
 
 template <class baseType>
 size_t bounded_deque_push_back(deque<baseType>& q, baseType x, size_t maxSize) {
@@ -338,10 +247,3 @@ int main() {
 
     return 0;
 }
-
-// int main() {
-//     cout << loser_bin.bin_point(Point(30,30)) << endl;
-//     cout << loser_bin.bin_point(Point(31,31)) << endl;
-//     cout << loser_bin.bin_point(Point(29,29)) << endl;
-//     return 0;
-// }

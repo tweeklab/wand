@@ -4,25 +4,7 @@
 #include <iostream>
 #include <vector>
 
-enum Axis {X_AXIS, Y_AXIS};
-
-class Point {
-    public:
-        int x;
-        int y;
-
-        Point() {};
-        Point(int x, int y): x(x), y(y) {};
-        Point(Point const& other): x(other.x), y(other.y) {};
-        int getAxis(Axis axis);
-        bool operator==(Point const& other);
-        bool operator!=(Point const& other);
-        Point operator-(Point const& other);
-        Point operator*(int mul) const;
-        Point operator/(int div) const;
-};
-
-std::ostream& operator<< (std::ostream &out, Point const& pt);
+#include "point.hpp"
 
 class Rect {
     public:

@@ -7,6 +7,7 @@ import numpy as np
 from time import monotonic
 from sklearn.cluster import KMeans
 import json
+import collections
 
 # frame_len = 144*176
 frame_len = 240*240
@@ -81,6 +82,7 @@ class MyTCPHandler(socketserver.BaseRequestHandler):
         i = 0
 
         detector_pass1 = create_pass1_detector()
+        frames = collections.deque(maxlen=50)
 
         recv = ""
         while True:
@@ -92,17 +94,26 @@ class MyTCPHandler(socketserver.BaseRequestHandler):
                 # output = np.zeros((480,640,3))
                 output = np.zeros((296,400,3))
                 point_count = len(d[1:])
+                frames.append(d[1:])
+                start = None
                 for point in d[1:]:
                     # cv2.rectangle(output, (point[0], point[1]), (point[2], point[3]), (0, 255, 0), 1, cv2.LINE_AA)
-                    cv2.circle(output, (point[0], point[1]), 2, (0, 255, 0))
+                    # cv2.circle(output, (point[0], point[1]), 2, (0, 255, 0))
+                    if start is not None:
+                        cv2.line(
+                            output, start, (point[0], point[1]), color=(255, 255, 255), thickness=2
+                        )
+                    start = (point[0], point[1])
                 cv2.putText(output, str(d[0]), (10,30), cv2.FONT_HERSHEY_SIMPLEX, 
                    .4, (0, 255, 0), 1, cv2.LINE_AA)
                 cv2.putText(output, str(point_count), (10,50), cv2.FONT_HERSHEY_SIMPLEX, 
                    .4, (0, 0, 255), 1, cv2.LINE_AA)
                 cv2.imshow("Test", output)
-                cv2.waitKey(1)
-                cv2.waitKey(1)
-                cv2.waitKey(1)
+                k = cv2.waitKey(20)
+                if (k & 0xFF) == ord('d'):
+                    with open("./frames_dump.json", "w") as df:
+                        print("Dumping.")
+                        json.dump(list(frames), df)
             # while self.recv_this_frame < frame_len:
             #     want_recv = frame_len - self.recv_this_frame
             #     if want_recv > 4096:

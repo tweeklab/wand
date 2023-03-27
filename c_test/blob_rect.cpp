@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "blob_rect.hpp"
+#include "point.hpp"
 
 using namespace std;
 
@@ -19,41 +20,6 @@ bool pointSortY (Point a, Point b) {
     return a.y < b.y;
 }
 typedef bool (*pointCompare)(Point, Point);
-
-int Point::getAxis(Axis axis) {
-    if (axis == X_AXIS)
-        return x;
-    return y;
-}
-
-bool Point::operator==(Point const& other) {
-    return (x == other.x) && (y == other.y);
-}
-
-bool Point::operator!=(Point const &other)
-{
-    return (x != other.x) || (y != other.y);
-}
-
-Point Point::operator-(Point const &other)
-{
-    return Point((x-other.x), (y-other.y));
-}
-
-Point Point::operator*(int mul) const
-{
-    return Point((x*mul), (y*mul));
-}
-
-Point Point::operator/(int div) const
-{
-    return Point((x/div), (y/div));
-}
-
-ostream& operator<< (ostream &out, Point const& pt) {
-    out << "Point(" << pt.x << "," << pt.y << ")";
-    return out;
-}
 
 bool Rect::intersect(Rect const& other, Rect& merged) {
     merged.tl.x = max(tl.x, other.tl.x);

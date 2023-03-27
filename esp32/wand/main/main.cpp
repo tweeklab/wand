@@ -1,18 +1,22 @@
 #include <stdio.h>
 #include <cstring>
 #include <vector>
+#include <deque>
 #include "esp_camera.h"
 #include "esp_timer.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-// #include "opencv_import.hpp"
 #include "wifi.h"
 #include "JPEGDEC.h"
 #include "blob_rect.hpp"
+#include "point.hpp"
+#include "atan_lut.hpp"
 #include <sys/socket.h>
 #include <netdb.h>            // struct addrinfo
+
+using namespace std;
 
 #define PWDN_GPIO_NUM     32
 #define RESET_GPIO_NUM    -1
@@ -40,6 +44,201 @@ uint8_t *out = NULL;
 JPEGDEC jpeg;
 
 #define OUT_BUFLEN 1024
+
+#define RAW_FRAMES_SIZE 50
+#define FILTER_QUEUE_SIZE 3
+#define FRAME_QUEUE_HW_MARK 10
+#define IDLE_FRAME_COUNT 30
+#define LOSER_BIN_BINSIZE 20
+#define LOSER_BIN_LIFETIME_SECONDS 30
+
+typedef enum {
+    IDLE
+} filter_state_t;
+
+template <class baseType>
+size_t bounded_deque_push_back(deque<baseType>& q, baseType x, size_t maxSize) {
+    size_t purge_count = 0;
+    q.push_back(x);
+    while (q.size() > maxSize) {
+        q.pop_front();
+        purge_count++;
+    }
+    return purge_count;
+}
+
+int atan2_lut(int y, int x) {
+    int lookup_val;
+    uint8_t flip_yx = 0;
+    uint8_t y_neg = 0;
+    uint8_t x_neg = 0;
+    if (x < 0) {
+        x_neg = 1;
+        x = -x;
+    }
+    if (y < 0) {
+        y_neg = 1;
+        y = -y;
+    }
+    if (y > x) {
+        int tmp = y;
+        y = x;
+        x = tmp;
+        flip_yx = 1;
+    }
+
+    if (x == 0) {
+        lookup_val = 0;
+    } else {
+        lookup_val = atan_lut_64[(y * 64)/x];
+    }
+    
+    if (flip_yx) {
+        lookup_val = 90 - lookup_val;
+    }
+    if (x_neg) {
+        lookup_val = 180 - lookup_val;
+    }
+    if (y_neg) {
+        lookup_val = -lookup_val;
+    }
+
+    return lookup_val;
+}
+
+int det(Point v1, Point v2) {
+    return (v1.x*v2.y) - (v1.y*v2.x);
+}
+
+int dot(Point v1, Point v2) {
+    return (v1.x*v2.x) + (v1.y*v2.y);
+}
+
+deque<vector<Point>> detect_queue;
+int idle_counter;
+int frame_counter;
+filter_state_t filter_state;
+PointBin loser_bin(LOSER_BIN_BINSIZE, 10);
+
+// Bound by FILTER_QUEUE_SIZE
+deque<vector<Point>> filter_queue; // Recent frames
+vector<Point> path_point_queue; // Winning points
+
+void append_to_path_point_queue(Point pt) {
+    if (path_point_queue.size() == 0 || path_point_queue.back() != pt) {
+        path_point_queue.push_back(pt);
+    }
+}
+
+void filter() {
+    int min_sum = INT32_MAX;
+    int winner_sum = 0;
+    vector<Point> winner_points;
+    Point winner(-1, -1);
+    // Build test grids
+    for (auto it1 = filter_queue[0].begin(); it1 != filter_queue[0].end(); it1++) {
+        if (loser_bin.contains(*it1))
+            continue;
+        for (auto it2 = filter_queue[1].begin(); it2 != filter_queue[1].end(); it2++) {
+            if (loser_bin.contains(*it2))
+                continue;
+            for (auto it3 = filter_queue[2].begin(); it3 != filter_queue[2].end(); it3++) {
+                if (loser_bin.contains(*it3))
+                    continue;
+                Point v0 = *it1 - path_point_queue.back();
+                Point v1 = *it2 - *it1;
+                Point v2 = *it3 - *it2;
+                if (*it1 == path_point_queue.back() || *it1 == *it2 || *it2 == *it3) {
+                    loser_bin.add(*it1);
+                    continue;
+                }
+                int angle1 = atan2_lut(det(v0, v1), dot(v0, v1));
+                int angle2 = atan2_lut(det(v1, v2), dot(v1, v2));
+                int sum = abs(angle1) + abs(angle2);
+                min_sum = std::min(min_sum, sum);
+                if (min_sum == sum) {
+                    winner_points = {path_point_queue.back(), *it1, *it2, *it3};
+                    winner = *it1;
+                    winner_sum = sum;
+                }
+            }
+        }
+    }
+    if (winner.x > 0 && winner.y > 0) {
+        append_to_path_point_queue(winner);
+    }
+    for (auto it1 = filter_queue[0].begin(); it1 != filter_queue[0].end(); it1++) {
+        if (*it1 != winner) {
+            loser_bin.add(*it1);
+        }
+    }
+}
+
+void process_single_frame(vector<Point> frame) {
+    // Yeah the frames are filtered when the first come in to
+    // handle_incoming_frame, but each time we run the detect
+    // queue it's better to apply current knowledge of losers
+    // to all frames in the queue that came in earlier.
+    vector<Point> tmp_pts;
+    for (auto pit = frame.begin(); pit < frame.end(); pit++) {
+        if (!loser_bin.contains(*pit)) {
+            tmp_pts.push_back(*pit);
+        }
+    }
+    if (tmp_pts.size() == 0) {
+        return;
+    }
+
+    bounded_deque_push_back(filter_queue, tmp_pts, FILTER_QUEUE_SIZE);
+    // Need all 3 frames in the queue to vote on a good point
+    if (filter_queue.size() != 3) {
+        return;
+    }
+    if (filter_queue[0].size() == 1) {
+        // Only one point in the frame, no ambiguity so just pass it
+        // along to the path point queue.
+        append_to_path_point_queue(filter_queue[0][0]);
+    } else {
+        if (path_point_queue.size() > 0) {
+            filter();
+        } else {
+            Point random_point;
+            random_point = filter_queue[0][rand() % filter_queue[0].size()];
+            append_to_path_point_queue(random_point);
+        }
+    }
+}
+
+
+void handle_incoming_frame(vector<Point> frame) {
+    vector<Point> tmp_pts;
+    for (auto pit = frame.begin(); pit < frame.end(); pit++) {
+        if (!loser_bin.contains(*pit)) {
+            tmp_pts.push_back(*pit);
+        }
+    }
+    if (tmp_pts.size() == 0) {
+        if (idle_counter < IDLE_FRAME_COUNT) {
+            ++idle_counter;
+        }
+    } else {
+        bounded_deque_push_back(detect_queue, tmp_pts, RAW_FRAMES_SIZE);
+        idle_counter = 0;
+    }
+
+    if (idle_counter >= IDLE_FRAME_COUNT) {
+        filter_state = IDLE;
+        detect_queue.clear();
+    }
+
+    if ((++frame_counter % FRAME_QUEUE_HW_MARK) == 0) {
+        path_point_queue.clear();
+        filter_queue.clear();
+        for (auto fit = detect_queue.begin(); fit != detect_queue.end(); fit++) {
+            process_single_frame(*fit);
+        }
+    }
+}
 
 #define HOST_IP "10.0.0.30"
 #define PORT 3333
@@ -170,17 +369,23 @@ extern "C" void app_main(void)
         jpeg.setUserPointer(&userdata);
         jpeg.decode(0,0,0);
 
+
+        findBlobRects(userdata.zero_points, rects);
+        centers.clear();
+        for (auto rit = rects.begin(); rit != rects.end(); rit++) {
+            centers.push_back(rit->center());
+        }
+
+        handle_incoming_frame(centers);
         uint64_t fr_end = esp_timer_get_time();
         i++;
 
-        findBlobRects(userdata.zero_points, rects);
-
         size_t sendlen;
-        sendlen = snprintf((char *)out, OUT_BUFLEN, "[%d%s", i, rects.size() > 0 ? "," : "");
-        for (size_t i = 0; i < rects.size(); i++) {
-            Point center = rects[i].center();
+        sendlen = snprintf((char *)out, OUT_BUFLEN, "[%d%s", i, path_point_queue.size() > 0 ? "," : "");
+        for (size_t i = 0; i < path_point_queue.size(); i++) {
+            Point center = path_point_queue[i];
             sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "[%d, %d]", center.x, center.y);
-            if (i < rects.size() - 1) {
+            if (i < path_point_queue.size() - 1) {
                 sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, ",");
             }
         }
@@ -188,7 +393,19 @@ extern "C" void app_main(void)
 
         ssize_t r = send(sock, out, sendlen, 0);
         if (!(i%30)) {
-            ESP_LOGI(TAG, "Time: %llu. %d (%d, %d - %d - %d) - %d", fr_end - fr_start, fb->len, jpeg.getWidth(), jpeg.getHeight(), userdata.zero_points.size(), userdata.zero_points.capacity(), r);
+            ESP_LOGI(
+                TAG,
+                "Time: %llu. %d (%d, %d - %d - %d) - %d - %d - %d",
+                fr_end - fr_start,
+                fb->len,
+                jpeg.getWidth(),
+                jpeg.getHeight(),
+                userdata.zero_points.size(),
+                userdata.zero_points.capacity(),
+                r,
+                detect_queue.size(),
+                loser_bin.prune(20)
+            );
         }
         jpeg.close();
         esp_camera_fb_return(fb);
