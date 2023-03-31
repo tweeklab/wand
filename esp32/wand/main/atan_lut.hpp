@@ -3,7 +3,7 @@
 
 #include <vector>
 
-#define LUT_SIZE 64
+#define ATAN_LUT_SIZE 64
 #define atan_lut atan_lut_64
 
 std::vector<int> atan_lut_64 = {

@@ -13,6 +13,7 @@
 #include "blob_rect.hpp"
 #include "point.hpp"
 #include "atan_lut.hpp"
+#include "cos_lut.hpp"
 #include <sys/socket.h>
 #include <netdb.h>            // struct addrinfo
 
@@ -53,8 +54,19 @@ JPEGDEC jpeg;
 #define LOSER_BIN_LIFETIME_SECONDS 30
 
 typedef enum {
-    IDLE
+    IDLE,
+    ACTIVE
 } filter_state_t;
+
+deque<vector<Point>> detect_queue;
+int idle_counter;
+int frame_counter;
+filter_state_t filter_state;
+PointBin loser_bin(LOSER_BIN_BINSIZE, 10);
+
+// Bound by FILTER_QUEUE_SIZE
+deque<vector<Point>> filter_queue; // Recent frames
+vector<Point> path_point_queue; // Winning points
 
 template <class baseType>
 size_t bounded_deque_push_back(deque<baseType>& q, baseType x, size_t maxSize) {
@@ -106,6 +118,30 @@ int atan2_lut(int y, int x) {
     return lookup_val;
 }
 
+int norm_lut(int y, int x) {
+    int angle;
+
+    if (x < 0) {
+        x = -x;
+    }
+    if (y < 0) {
+        y = -y;
+    }
+    if (y > x) {
+        int tmp = y;
+        y = x;
+        x = tmp;
+    }
+
+    if (x == 0) {
+        angle = 0;
+    } else {
+        angle = atan_lut_64[(y * 64)/x];
+    }
+
+    return (x*32768) / cos_lut[angle];
+}
+
 int det(Point v1, Point v2) {
     return (v1.x*v2.y) - (v1.y*v2.x);
 }
@@ -113,16 +149,6 @@ int det(Point v1, Point v2) {
 int dot(Point v1, Point v2) {
     return (v1.x*v2.x) + (v1.y*v2.y);
 }
-
-deque<vector<Point>> detect_queue;
-int idle_counter;
-int frame_counter;
-filter_state_t filter_state;
-PointBin loser_bin(LOSER_BIN_BINSIZE, 10);
-
-// Bound by FILTER_QUEUE_SIZE
-deque<vector<Point>> filter_queue; // Recent frames
-vector<Point> path_point_queue; // Winning points
 
 void append_to_path_point_queue(Point pt) {
     if (path_point_queue.size() == 0 || path_point_queue.back() != pt) {
@@ -169,7 +195,7 @@ void filter() {
     }
     for (auto it1 = filter_queue[0].begin(); it1 != filter_queue[0].end(); it1++) {
         if (*it1 != winner) {
-            loser_bin.add(*it1);
+            loser_bin.add(*it1, winner);
         }
     }
 }
@@ -229,6 +255,8 @@ void handle_incoming_frame(vector<Point> frame) {
     if (idle_counter >= IDLE_FRAME_COUNT) {
         filter_state = IDLE;
         detect_queue.clear();
+    } else {
+        filter_state = ACTIVE;
     }
 
     if ((++frame_counter % FRAME_QUEUE_HW_MARK) == 0) {
@@ -395,15 +423,18 @@ extern "C" void app_main(void)
         if (!(i%30)) {
             ESP_LOGI(
                 TAG,
-                "Time: %llu. %d (%d, %d - %d - %d) - %d - %d - %d",
+                // "Time: %llu. %d (%d, %d - %d - %d) - %d - %d - %d",
+                "Time: %llu %d - %d - %d - %d",
                 fr_end - fr_start,
-                fb->len,
-                jpeg.getWidth(),
-                jpeg.getHeight(),
-                userdata.zero_points.size(),
-                userdata.zero_points.capacity(),
-                r,
+                // fb->len,
+                // jpeg.getWidth(),
+                // jpeg.getHeight(),
+                // userdata.zero_points.size(),
+                // userdata.zero_points.capacity(),
+                // r,
+                filter_state,
                 detect_queue.size(),
+                loser_bin.bin.size(),
                 loser_bin.prune(20)
             );
         }

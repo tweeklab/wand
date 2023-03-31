@@ -1,0 +1,52 @@
+D* Blob detector
+D* Frame queue (detect_queue) - points per frame that are not losers
+D* filtering at each frame
+D  * losers get filtered from each frame
+D  * don't add empty frames to the frame queue
+D * Idle state
+    D * empty frame counter after loser filtering
+    D * 30 frames with no points -> Idle
+       D * Clear frame queue on transition to idle
+* Pattern detector implementation
+    D * Loser bin  (implemented as collections.Counter)
+        D * losers in 2d list each element of bin_size pixels (bin_size = 20)
+           D * std::map
+        D * Loser points in list to search by timestamp
+        D     * std::priority_queue (works like heapq)
+        D     * evict after 30 seconds - trim_losers
+    D * Skip pattern detector on empty frame queue
+    D * Point filter implementation
+        D * Components:
+            D * Filter queue - FIFO of 3 most recent raw detected frames
+                D * Need min of 3 points to enter filter logic
+            D * Path queue - list of points (single winner per frame) that have made it through the filter
+                D * Dont append duplicates (if new point is == queue head, drop new point)
+                * Most recent point here becomes "4th frame" for the filter
+        D * Algorighm
+            D * Oldest frame in filter queue candidate for point queue
+            D * No process until 3 frames in the queue
+            D * 1 point in oldest frame - pass directly to path queue, no filter needed
+            D * Multiple points
+                D * Empty path queue - need to pick a point, take first non-loser point (TODO maybe make this random?)
+                D * Existing path queue
+                    D * Test Grid: Create cartesean product of indices of all 3 frames in the queue, tuples ordered as oldest -> newest
+                        D * std::iota for the index ranges - did not use indexes
+                        D * just hand-code the cartesean product, since we have a fixed number of vectors
+                    D * Most recent path_queue entry is the reference point
+                    D * For each combination in the test Grid
+                        D * Prepend reference point
+                        D * For all points in the current combination
+                            D * Compute 2-tuples of vectors
+                                D * filter_queue[0] - reference, filter_queue[1] - filter_queue[0]
+                                D * filter_queue[1] - filter_queue[0], filter_queue[2] - filter_queue[1]
+                            D * Compute the displacement of each tuple
+                            * weight this with the norm of the first vector
+                            D * Add to total displacement for this combination
+                        D * Compare to current minimum, update if needed
+                    D * Minimum combination is the path of least displacement, take the oldest point from the
+                      winning combo, promote to the path queue
+                    D * Add all losing points from the oldest filter queue entry and add to the lower bin
+
+
+
+
