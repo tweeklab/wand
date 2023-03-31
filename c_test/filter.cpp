@@ -10,6 +10,7 @@
 #include "point.hpp"
 #include "test_frames.hpp"
 #include "atan_lut.hpp"
+#include "cos_lut.hpp"
 
 using namespace std;
 
@@ -209,41 +210,82 @@ void handle_incoming_frame(vector<Point> frame) {
     }
 }
 
-int main() {
-    vector<std::chrono::duration<double, std::milli>> all_frame_times;
+int norm_lut(int y, int x) {
+    int angle;
 
-    idle_counter = 0;
-    frame_counter = 0;
-    srand(42);
-
-    cout << test_frame_stream.size() << endl;
-
-    for (auto fit = test_frame_stream.begin(); fit != test_frame_stream.end(); fit++) {
-        auto t1 = std::chrono::high_resolution_clock::now();
-        handle_incoming_frame(*fit);
-        auto t2 = std::chrono::high_resolution_clock::now();
-        std::chrono::duration<double, std::milli> ms_double = t2 - t1;
-        all_frame_times.push_back(ms_double);
+    if (x < 0) {
+        x = -x;
+    }
+    if (y < 0) {
+        y = -y;
+    }
+    if (y > x) {
+        int tmp = y;
+        y = x;
+        x = tmp;
     }
 
-    auto min_time = min_element(all_frame_times.begin(), all_frame_times.end());
-    cout << "Min frame time: " << (*min_time).count() << "ms" << endl;
-    auto max_time = max_element(all_frame_times.begin(), all_frame_times.end());
-    cout << "Max frame time: " << (*max_time).count() << "ms" << endl;
-
-    for (auto it = path_point_queue.begin(); it != path_point_queue.end(); it++) {
-        cout << *it << "," << endl;
-    }
-    // cout << "==============" << endl;
-    // for (auto it = loser_bin.bin_count.begin(); it != loser_bin.bin_count.end(); it++) {
-    //     cout << it->first * loser_bin.bin_size << " " << it->second << endl;
-    // }
-    cout << "==============" << endl;
-    for (auto it = loser_bin.bin.begin(); it != loser_bin.bin.end(); it++) {
-        if (loser_bin.bin_count[it->first] < loser_bin.bin_threshold)
-            continue;
-        cout << it->first * loser_bin.bin_size << "," << endl;
+    if (x == 0) {
+        angle = 0;
+    } else {
+        angle = atan_lut_64[(y * 64)/x];
     }
 
-    return 0;
+    return (x*32768) / cos_lut[angle];
 }
+
+int main() {
+    int total = 0;
+
+    auto t1 = std::chrono::high_resolution_clock::now();
+    for (auto i = 0; i < 101; i++) {
+        total += norm_lut(i, 100);
+    }
+
+    for (auto i = 100; i >= 0; i--) {
+        total += norm_lut(100, i);
+    }
+    auto t2 = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double, std::milli> ms_double = t2 - t1;
+    cout << total << endl;
+    cout << "Total time: " << ms_double.count() << "ms" << endl;
+}
+
+// int main() {
+//     vector<std::chrono::duration<double, std::milli>> all_frame_times;
+
+//     idle_counter = 0;
+//     frame_counter = 0;
+//     srand(42);
+
+//     cout << test_frame_stream.size() << endl;
+
+//     for (auto fit = test_frame_stream.begin(); fit != test_frame_stream.end(); fit++) {
+//         auto t1 = std::chrono::high_resolution_clock::now();
+//         handle_incoming_frame(*fit);
+//         auto t2 = std::chrono::high_resolution_clock::now();
+//         std::chrono::duration<double, std::milli> ms_double = t2 - t1;
+//         all_frame_times.push_back(ms_double);
+//     }
+
+//     auto min_time = min_element(all_frame_times.begin(), all_frame_times.end());
+//     cout << "Min frame time: " << (*min_time).count() << "ms" << endl;
+//     auto max_time = max_element(all_frame_times.begin(), all_frame_times.end());
+//     cout << "Max frame time: " << (*max_time).count() << "ms" << endl;
+
+//     for (auto it = path_point_queue.begin(); it != path_point_queue.end(); it++) {
+//         cout << *it << "," << endl;
+//     }
+//     // cout << "==============" << endl;
+//     // for (auto it = loser_bin.bin_count.begin(); it != loser_bin.bin_count.end(); it++) {
+//     //     cout << it->first * loser_bin.bin_size << " " << it->second << endl;
+//     // }
+//     cout << "==============" << endl;
+//     for (auto it = loser_bin.bin.begin(); it != loser_bin.bin.end(); it++) {
+//         if (loser_bin.bin_count[it->first] < loser_bin.bin_threshold)
+//             continue;
+//         cout << it->first * loser_bin.bin_size << "," << endl;
+//     }
+
+//     return 0;
+// }

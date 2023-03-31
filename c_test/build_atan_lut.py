@@ -16,7 +16,7 @@ with open("atan_lut.hpp", "w") as f:
     f.write("#include <vector>\n")
     f.write("\n")
 
-    f.write(f"#define LUT_SIZE {resolution}\n")
+    f.write(f"#define ATAN_LUT_SIZE {resolution}\n")
     f.write(f"#define atan_lut atan_lut_{resolution}\n")
     f.write("\n")
     f.write(f"std::vector<int> atan_lut_{resolution} = {{\n")
