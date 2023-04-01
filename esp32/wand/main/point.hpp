@@ -19,6 +19,7 @@ class Point {
         bool operator==(Point const& other);
         bool operator!=(Point const& other);
         Point operator-(Point const& other);
+        Point operator+(Point const& other);
         Point operator*(int mul) const;
         Point operator/(int div) const;
         Point& operator=(const Point&) = default;

@@ -10,7 +10,9 @@
                 "${config:idf.espIdfPathWin}/components/**",
                 "${config:idf.espAdfPath}/components/**",
                 "${config:idf.espAdfPathWin}/components/**",
-                "${workspaceFolder}/main/**"
+                "${workspaceFolder}/main/**",
+                "${workspaceFolder}/components/**",
+                "${workspaceFolder}/managed_components/**"
             ],
             "browse": {
                 "path": [
@@ -18,7 +20,12 @@
                     "${config:idf.espIdfPathWin}/components",
                     "${config:idf.espAdfPath}/components/**",
                     "${config:idf.espAdfPathWin}/components/**",
-                    "${workspaceFolder}/main"
+                    "${workspaceFolder}/main",
+                    "${workspaceFolder}/main/**",
+                    "${workspaceFolder}/components",
+                    "${workspaceFolder}/components/**",
+                    "${workspaceFolder}/managed_components",
+                    "${workspaceFolder}/managed_components/**"
                 ],
                 "limitSymbolsToIncludedHeaders": false
             }

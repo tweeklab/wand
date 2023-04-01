@@ -46,27 +46,33 @@ JPEGDEC jpeg;
 
 #define OUT_BUFLEN 1024
 
-#define RAW_FRAMES_SIZE 50
+#define RAW_FRAMES_SIZE 100
 #define FILTER_QUEUE_SIZE 3
+#define VELOCITY_QUEUE_SIZE 10
 #define FRAME_QUEUE_HW_MARK 10
 #define IDLE_FRAME_COUNT 30
 #define LOSER_BIN_BINSIZE 20
-#define LOSER_BIN_LIFETIME_SECONDS 30
+#define LOSER_BIN_THRESHOLD 3
+#define LOSER_BIN_LIFETIME_SECONDS 10
 
 typedef enum {
     IDLE,
-    ACTIVE
+    ACTIVE,
+    DWELL,
+    COMMIT
 } filter_state_t;
 
 deque<vector<Point>> detect_queue;
 int idle_counter;
 int frame_counter;
 filter_state_t filter_state;
-PointBin loser_bin(LOSER_BIN_BINSIZE, 10);
+PointBin loser_bin(LOSER_BIN_BINSIZE, LOSER_BIN_THRESHOLD);
 
 // Bound by FILTER_QUEUE_SIZE
 deque<vector<Point>> filter_queue; // Recent frames
 vector<Point> path_point_queue; // Winning points
+deque<Point> velocity_queue; // Deque tracking recent points for velocity measurement
+int v;
 
 template <class baseType>
 size_t bounded_deque_push_back(deque<baseType>& q, baseType x, size_t maxSize) {
@@ -118,8 +124,11 @@ int atan2_lut(int y, int x) {
     return lookup_val;
 }
 
-int norm_lut(int y, int x) {
+// Lookup table-based 2D norm calculation
+int norm_lut(Point v) {
     int angle;
+    int x = v.x;
+    int y = v.y;
 
     if (x < 0) {
         x = -x;
@@ -156,6 +165,20 @@ void append_to_path_point_queue(Point pt) {
     }
 }
 
+int compute_velocity_queue_displacement(void) {
+    auto offset_it = velocity_queue.begin() + 1;
+    auto it = velocity_queue.begin();
+    Point vsum(0, 0);
+    if (velocity_queue.size() < 5) {
+        return 0;
+    }
+    for (;offset_it != velocity_queue.end();it++, offset_it++) {
+        // cout << *it << "->" << *offset_it << endl;
+        vsum  = vsum + (*offset_it - *it);
+    }
+    return norm_lut(vsum);
+}
+
 void filter() {
     int min_sum = INT32_MAX;
     int winner_sum = 0;
@@ -178,9 +201,9 @@ void filter() {
                     loser_bin.add(*it1);
                     continue;
                 }
-                int angle1 = atan2_lut(det(v0, v1), dot(v0, v1));
-                int angle2 = atan2_lut(det(v1, v2), dot(v1, v2));
-                int sum = abs(angle1) + abs(angle2);
+                int angle1 = atan2_lut(det(v0, v1), dot(v0, v1)) * norm_lut(v0);
+                int angle2 = atan2_lut(det(v1, v2), dot(v1, v2)) * norm_lut(v1);
+                int sum = (abs(angle1) + abs(angle2));
                 min_sum = std::min(min_sum, sum);
                 if (min_sum == sum) {
                     winner_points = {path_point_queue.back(), *it1, *it2, *it3};
@@ -192,9 +215,15 @@ void filter() {
     }
     if (winner.x > 0 && winner.y > 0) {
         append_to_path_point_queue(winner);
+        bounded_deque_push_back(velocity_queue, winner_points[3], VELOCITY_QUEUE_SIZE);
     }
     for (auto it1 = filter_queue[0].begin(); it1 != filter_queue[0].end(); it1++) {
         if (*it1 != winner) {
+            // Points that bin with the winner are ignored.  This prevents
+            // double-hits near the winning point from causing the winner
+            // to convert to a loser.  It also helps prevent the winning point
+            // from converting to a loser during the dwell time because
+            // it will start showing up in ever successive frame
             loser_bin.add(*it1, winner);
         }
     }
@@ -224,6 +253,7 @@ void process_single_frame(vector<Point> frame) {
         // Only one point in the frame, no ambiguity so just pass it
         // along to the path point queue.
         append_to_path_point_queue(filter_queue[0][0]);
+        bounded_deque_push_back(velocity_queue, filter_queue[0][0], VELOCITY_QUEUE_SIZE);
     } else {
         if (path_point_queue.size() > 0) {
             filter();
@@ -234,7 +264,6 @@ void process_single_frame(vector<Point> frame) {
         }
     }
 }
-
 
 void handle_incoming_frame(vector<Point> frame) {
     vector<Point> tmp_pts;
@@ -255,6 +284,7 @@ void handle_incoming_frame(vector<Point> frame) {
     if (idle_counter >= IDLE_FRAME_COUNT) {
         filter_state = IDLE;
         detect_queue.clear();
+        velocity_queue.clear();
     } else {
         filter_state = ACTIVE;
     }
@@ -266,6 +296,7 @@ void handle_incoming_frame(vector<Point> frame) {
             process_single_frame(*fit);
         }
     }
+    v = compute_velocity_queue_displacement();
 }
 
 #define HOST_IP "10.0.0.30"
@@ -424,18 +455,19 @@ extern "C" void app_main(void)
             ESP_LOGI(
                 TAG,
                 // "Time: %llu. %d (%d, %d - %d - %d) - %d - %d - %d",
-                "Time: %llu %d - %d - %d - %d",
+                "Time: %llu (%d) %d - %d - %d - %d (%d)",
                 fr_end - fr_start,
                 // fb->len,
                 // jpeg.getWidth(),
                 // jpeg.getHeight(),
                 // userdata.zero_points.size(),
-                // userdata.zero_points.capacity(),
+                userdata.zero_points.capacity(),
                 // r,
                 filter_state,
                 detect_queue.size(),
                 loser_bin.bin.size(),
-                loser_bin.prune(20)
+                loser_bin.prune(LOSER_BIN_LIFETIME_SECONDS),
+                v
             );
         }
         jpeg.close();

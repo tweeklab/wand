@@ -28,6 +28,11 @@ Point Point::operator-(Point const &other)
     return Point((x-other.x), (y-other.y));
 }
 
+Point Point::operator+(Point const &other)
+{
+    return Point((x+other.x), (y+other.y));
+}
+
 Point Point::operator*(int mul) const
 {
     return Point((x*mul), (y*mul));
