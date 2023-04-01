@@ -44,7 +44,7 @@ static const char *TAG = "wand";
 uint8_t *out = NULL;
 JPEGDEC jpeg;
 
-#define OUT_BUFLEN 1024
+#define OUT_BUFLEN 2048
 
 #define RAW_FRAMES_SIZE 100
 #define FILTER_QUEUE_SIZE 3
@@ -267,6 +267,8 @@ void process_single_frame(vector<Point> frame) {
 
 void handle_incoming_frame(vector<Point> frame) {
     vector<Point> tmp_pts;
+    int dwell_start_frame = 0;
+
     for (auto pit = frame.begin(); pit < frame.end(); pit++) {
         if (!loser_bin.contains(*pit)) {
             tmp_pts.push_back(*pit);
@@ -285,8 +287,6 @@ void handle_incoming_frame(vector<Point> frame) {
         filter_state = IDLE;
         detect_queue.clear();
         velocity_queue.clear();
-    } else {
-        filter_state = ACTIVE;
     }
 
     if ((++frame_counter % FRAME_QUEUE_HW_MARK) == 0) {
@@ -295,8 +295,19 @@ void handle_incoming_frame(vector<Point> frame) {
         for (auto fit = detect_queue.begin(); fit != detect_queue.end(); fit++) {
             process_single_frame(*fit);
         }
+
+        v = compute_velocity_queue_displacement();
+        if (v > 20) {
+            filter_state = ACTIVE;
+        } else if (filter_state == ACTIVE && v < 20) {
+            filter_state = DWELL;
+            dwell_start_frame = frame_counter;
+        } else if (filter_state == DWELL && path_point_queue.size() > 10) {
+            if ((frame_counter - dwell_start_frame) > 60) {
+                filter_state = COMMIT;
+            }
+        }
     }
-    v = compute_velocity_queue_displacement();
 }
 
 #define HOST_IP "10.0.0.30"
@@ -349,7 +360,9 @@ int drawMCUs(JPEGDRAW *pDraw)
         for (int x = 0; x < pDraw->iWidth; x++) {
             pixel = (pIn[x] > 30 ? 255 : 0);
             if (pixel == 0) {
-                user->zero_points.push_back(Point(pDraw->x + x, y/user->height));
+                if (user->zero_points.size() < 512) {
+                    user->zero_points.push_back(Point(pDraw->x + x, y/user->height));
+                }
             }
         }
         pIn += pDraw->iWidth;
@@ -414,7 +427,7 @@ extern "C" void app_main(void)
     wifi_init_sta();
     int sock = do_connect();
 
-    out = (uint8_t *)heap_caps_malloc(OUT_BUFLEN, (MALLOC_CAP_8BIT));
+    out = (uint8_t *)heap_caps_malloc(OUT_BUFLEN, (MALLOC_CAP_8BIT|MALLOC_CAP_SPIRAM));
 
     while(1) {
         uint64_t fr_start = esp_timer_get_time();
@@ -437,21 +450,32 @@ extern "C" void app_main(void)
 
         handle_incoming_frame(centers);
         uint64_t fr_end = esp_timer_get_time();
+        jpeg.close();
+        esp_camera_fb_return(fb);
+
         i++;
 
         size_t sendlen;
-        sendlen = snprintf((char *)out, OUT_BUFLEN, "[%d%s", i, path_point_queue.size() > 0 ? "," : "");
-        for (size_t i = 0; i < path_point_queue.size(); i++) {
-            Point center = path_point_queue[i];
-            sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "[%d, %d]", center.x, center.y);
-            if (i < path_point_queue.size() - 1) {
-                sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, ",");
+        sendlen = snprintf((char *)out, OUT_BUFLEN, "[%d, %d, %d", filter_state, i, v);
+        if (filter_state == COMMIT) {
+            printf("Send\n");
+            sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, ",");
+            for (size_t i = 0; i < path_point_queue.size(); i++) {
+                Point center = path_point_queue[i];
+                sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "[%d, %d]", center.x, center.y);
+                if (i < path_point_queue.size() - 1) {
+                    sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, ",");
+                }
             }
+            filter_state = IDLE;
+            detect_queue.clear();
+            velocity_queue.clear();
         }
         sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "]\n");
 
         ssize_t r = send(sock, out, sendlen, 0);
         if (!(i%30)) {
+            // heap_caps_print_heap_info(MALLOC_CAP_DEFAULT);
             ESP_LOGI(
                 TAG,
                 // "Time: %llu. %d (%d, %d - %d - %d) - %d - %d - %d",
@@ -470,7 +494,5 @@ extern "C" void app_main(void)
                 v
             );
         }
-        jpeg.close();
-        esp_camera_fb_return(fb);
     }
 }
