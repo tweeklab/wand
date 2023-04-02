@@ -2,6 +2,8 @@
 #include <cstring>
 #include <vector>
 #include <deque>
+#include <algorithm>
+#include <utility>
 #include "esp_camera.h"
 #include "esp_timer.h"
 #include "esp_log.h"
@@ -67,6 +69,7 @@ int idle_counter;
 int frame_counter;
 filter_state_t filter_state;
 PointBin loser_bin(LOSER_BIN_BINSIZE, LOSER_BIN_THRESHOLD);
+PointBin reduce_bin(10, 0);
 
 // Bound by FILTER_QUEUE_SIZE
 deque<vector<Point>> filter_queue; // Recent frames
@@ -358,7 +361,7 @@ int drawMCUs(JPEGDRAW *pDraw)
 
     for (int y = top; y < bottom; y+=user->height) {
         for (int x = 0; x < pDraw->iWidth; x++) {
-            pixel = (pIn[x] > 30 ? 255 : 0);
+            pixel = (pIn[x] > 70 ? 255 : 0);
             if (pixel == 0) {
                 if (user->zero_points.size() < 512) {
                     user->zero_points.push_back(Point(pDraw->x + x, y/user->height));
@@ -370,6 +373,54 @@ int drawMCUs(JPEGDRAW *pDraw)
     return 1;
 }
 
+void scale(std::vector<Point> const& orig, std::vector<Point>& scaled) {
+    pair minMaxX = std::minmax_element(orig.begin(), orig.end(), pointSortX);
+    pair minMaxY = std::minmax_element(orig.begin(), orig.end(), pointSortY);
+    int xSize = minMaxX.second->x - minMaxX.first->x;
+    int ySize = minMaxY.second->y - minMaxY.first->y;
+    int dominant_size;
+    int scaled_dominant_dimension;
+    int shiftX;
+    int shiftY;
+    bool xDominant;
+    int scaledMinX;
+    int scaledMaxX;
+    int scaledMinY;
+    int scaledMaxY;
+
+    if ((400-xSize) < (296-ySize)) {
+        dominant_size = xSize;
+        scaled_dominant_dimension = 40;
+        xDominant = true;
+    } else {
+        dominant_size = ySize;
+        scaled_dominant_dimension = 29;
+        xDominant = false;
+    }
+    scaledMinY = (minMaxY.first->y * scaled_dominant_dimension)/dominant_size;
+    scaledMaxY = (minMaxY.second->y * scaled_dominant_dimension)/dominant_size;
+    scaledMinX = (minMaxX.first->x * scaled_dominant_dimension)/dominant_size;
+    scaledMaxX = (minMaxX.second->x * scaled_dominant_dimension)/dominant_size;
+
+    for (auto it = orig.begin(); it != orig.end(); it++) {
+        Point orig_point = *it;
+        orig_point.x = orig_point.x - minMaxX.first->x;
+        orig_point.y = orig_point.y - minMaxY.first->y;
+        Point scaled_point(
+            (orig_point.x*scaled_dominant_dimension)/dominant_size,
+            (orig_point.y*scaled_dominant_dimension)/dominant_size
+        );
+
+        if (xDominant) {
+            scaled_point.y = scaled_point.y + (scaledMinY+(29-scaledMaxY))/2;
+        } else {
+            scaled_point.x = scaled_point.x + (scaledMinX+(40-scaledMaxX))/2;
+        }
+
+        scaled.push_back(scaled_point);
+    }
+}
+
 extern "C" void app_main(void)
 {
     camera_config_t config;
@@ -378,6 +429,7 @@ extern "C" void app_main(void)
     user_data_t userdata;
     std::vector<Point> centers;
     std::vector<Rect> rects;
+    std::vector<Point> shrink_points;
 
     config.ledc_channel = LEDC_CHANNEL_0;
     config.ledc_timer = LEDC_TIMER_0;
@@ -459,14 +511,16 @@ extern "C" void app_main(void)
         sendlen = snprintf((char *)out, OUT_BUFLEN, "[%d, %d, %d", filter_state, i, v);
         if (filter_state == COMMIT) {
             printf("Send\n");
+            shrink_points.clear();
             sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, ",");
-            for (size_t i = 0; i < path_point_queue.size(); i++) {
-                Point center = path_point_queue[i];
-                sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "[%d, %d]", center.x, center.y);
-                if (i < path_point_queue.size() - 1) {
+            scale(path_point_queue, shrink_points);
+            for (auto it = shrink_points.begin(); it != shrink_points.end(); it++) {
+                if (it != shrink_points.begin()) {
                     sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, ",");
                 }
+                sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "[%d, %d]", it->x, it->y);
             }
+
             filter_state = IDLE;
             detect_queue.clear();
             velocity_queue.clear();

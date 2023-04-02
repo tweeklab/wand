@@ -26,6 +26,8 @@ class Rect {
 
 std::ostream& operator<< (std::ostream &out, Rect const& rect);
 
+bool pointSortX (Point a, Point b);
+bool pointSortY (Point a, Point b);
 size_t findBlobRects(std::vector<Point>& framePoints, std::vector<Rect>& blobRects);
 
 #endif // _BLOB_RECT_H_
