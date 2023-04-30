@@ -76,7 +76,7 @@ size_t rectsProjectedFromAxis(vector<Point>& framePoints, vector<Rect>& blobRect
     prevMajorBreak = -1;
     vector<int> majorBreaks;
     for (majorIdx=0; majorIdx<framePoints.size(); majorIdx++) {
-        if ((framePoints[majorIdx].getAxis(majorAxis) - prevMajorBreak) > 1) {
+        if ((framePoints[majorIdx].getAxis(majorAxis) - prevMajorBreak) > 10) {
             majorBreaks.push_back(majorIdx);
         }
         prevMajorBreak = framePoints[majorIdx].getAxis(majorAxis);
@@ -101,7 +101,7 @@ size_t rectsProjectedFromAxis(vector<Point>& framePoints, vector<Rect>& blobRect
         prevMinorIdx = prevMajorIdx;
         minorIdx=prevMajorIdx;
         for (; minorIdx<majorBreaks[majorIdx]; minorIdx++) {
-            if ((framePoints[minorIdx].getAxis(minorAxis) - prevMinorBreak) > 1) {
+            if ((framePoints[minorIdx].getAxis(minorAxis) - prevMinorBreak) > 10) {
                 if (minorIdx != prevMinorIdx) {
                     if (majorAxis == X_AXIS) {
                         blobRects.push_back(

@@ -54,7 +54,7 @@ JPEGDEC jpeg;
 #define FRAME_QUEUE_HW_MARK 10
 #define IDLE_FRAME_COUNT 30
 #define LOSER_BIN_BINSIZE 20
-#define LOSER_BIN_THRESHOLD 3
+#define LOSER_BIN_THRESHOLD 10
 #define LOSER_BIN_LIFETIME_SECONDS 10
 
 typedef enum {
@@ -200,10 +200,6 @@ void filter() {
                 Point v0 = *it1 - path_point_queue.back();
                 Point v1 = *it2 - *it1;
                 Point v2 = *it3 - *it2;
-                if (*it1 == path_point_queue.back() || *it1 == *it2 || *it2 == *it3) {
-                    loser_bin.add(*it1);
-                    continue;
-                }
                 int angle1 = atan2_lut(det(v0, v1), dot(v0, v1)) * norm_lut(v0);
                 int angle2 = atan2_lut(det(v1, v2), dot(v1, v2)) * norm_lut(v1);
                 int sum = (abs(angle1) + abs(angle2));
@@ -356,15 +352,15 @@ int drawMCUs(JPEGDRAW *pDraw)
     user_data_t *user = (user_data_t *)pDraw->pUser;
     uint8_t pixel;
 
-    int top = pDraw->y * user->height;
-    int bottom = top + (pDraw->iHeight * user->height);
+    int top = pDraw->y * user->width;
+    int bottom = top + (pDraw->iHeight * user->width);
 
-    for (int y = top; y < bottom; y+=user->height) {
+    for (int y = top; y < bottom; y+=user->width) {
         for (int x = 0; x < pDraw->iWidth; x++) {
-            pixel = (pIn[x] > 70 ? 255 : 0);
+            pixel = (pIn[x] > 2 ? 255 : 0);
             if (pixel == 0) {
                 if (user->zero_points.size() < 512) {
-                    user->zero_points.push_back(Point(pDraw->x + x, y/user->height));
+                    user->zero_points.push_back(Point(pDraw->x + x, y/user->width));
                 }
             }
         }
@@ -373,52 +369,35 @@ int drawMCUs(JPEGDRAW *pDraw)
     return 1;
 }
 
-void scale(std::vector<Point> const& orig, std::vector<Point>& scaled) {
+bool scale(std::vector<Point> const& orig, std::vector<Point>& scaled) {
     pair minMaxX = std::minmax_element(orig.begin(), orig.end(), pointSortX);
     pair minMaxY = std::minmax_element(orig.begin(), orig.end(), pointSortY);
     int xSize = minMaxX.second->x - minMaxX.first->x;
     int ySize = minMaxY.second->y - minMaxY.first->y;
-    int dominant_size;
-    int scaled_dominant_dimension;
-    int shiftX;
-    int shiftY;
-    bool xDominant;
-    int scaledMinX;
-    int scaledMaxX;
-    int scaledMinY;
-    int scaledMaxY;
-
-    if ((400-xSize) < (296-ySize)) {
-        dominant_size = xSize;
-        scaled_dominant_dimension = 40;
-        xDominant = true;
+    if (xSize < 40 || ySize < 30)
+        return false;
+    int scaleFactor = 10;
+    if ((ySize*100)/296 < (xSize*100)/400) {
+        // Scale X axis
+        scaleFactor = 1 + (10*xSize)/400;
     } else {
-        dominant_size = ySize;
-        scaled_dominant_dimension = 29;
-        xDominant = false;
+        // Scale Y axis
+        scaleFactor = 1 + (10*ySize)/296;
     }
-    scaledMinY = (minMaxY.first->y * scaled_dominant_dimension)/dominant_size;
-    scaledMaxY = (minMaxY.second->y * scaled_dominant_dimension)/dominant_size;
-    scaledMinX = (minMaxX.first->x * scaled_dominant_dimension)/dominant_size;
-    scaledMaxX = (minMaxX.second->x * scaled_dominant_dimension)/dominant_size;
 
     for (auto it = orig.begin(); it != orig.end(); it++) {
         Point orig_point = *it;
         orig_point.x = orig_point.x - minMaxX.first->x;
         orig_point.y = orig_point.y - minMaxY.first->y;
         Point scaled_point(
-            (orig_point.x*scaled_dominant_dimension)/dominant_size,
-            (orig_point.y*scaled_dominant_dimension)/dominant_size
+            orig_point.x/scaleFactor,
+            orig_point.y/scaleFactor
         );
-
-        if (xDominant) {
-            scaled_point.y = scaled_point.y + (scaledMinY+(29-scaledMaxY))/2;
-        } else {
-            scaled_point.x = scaled_point.x + (scaledMinX+(40-scaledMaxX))/2;
-        }
 
         scaled.push_back(scaled_point);
     }
+
+    return true;
 }
 
 extern "C" void app_main(void)
@@ -507,42 +486,66 @@ extern "C" void app_main(void)
 
         i++;
 
-        size_t sendlen;
-        sendlen = snprintf((char *)out, OUT_BUFLEN, "[%d, %d, %d", filter_state, i, v);
+        size_t sendlen = 0;
+        sendlen = snprintf((char *)out, OUT_BUFLEN, "[\"STAT\", %d, %d, %d]\n", filter_state, i, v);
+        send(sock, out, sendlen, 0);
+
+        sendlen = 0;
+        sendlen = snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "[\"WINNERS\", [");
+        for (auto it = velocity_queue.begin(); it != velocity_queue.end(); it++) {
+            if (it != velocity_queue.begin()) {
+                sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, ",");
+            }
+            sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "[%d, %d]", it->x, it->y);
+        }
+        sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "]]\n");
+        send(sock, out, sendlen, 0);
+
+        sendlen = 0;
+        sendlen = snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "[\"LOSERS\", [");
+        for (auto it = loser_bin.bin.begin(); it != loser_bin.bin.end(); it++) {
+            if (it != loser_bin.bin.begin()) {
+                if (it->second < loser_bin.bin_threshold) {
+                    continue;
+                }
+                sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, ",");
+            }
+            sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "[%d, %d]", it->first.x, it->first.y);
+        }
+        sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "]]\n");
+        send(sock, out, sendlen, 0);
+
         if (filter_state == COMMIT) {
             printf("Send\n");
+            sendlen = 0;
+            sendlen = snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "[\"COMMIT\", [");
             shrink_points.clear();
-            sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, ",");
-            scale(path_point_queue, shrink_points);
-            for (auto it = shrink_points.begin(); it != shrink_points.end(); it++) {
-                if (it != shrink_points.begin()) {
-                    sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, ",");
+            if (scale(path_point_queue, shrink_points)) {
+                for (auto it = shrink_points.begin(); it != shrink_points.end(); it++) {
+                    if (it != shrink_points.begin()) {
+                        sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, ",");
+                    }
+                    sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "[%d, %d]", it->x, it->y);
                 }
-                sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "[%d, %d]", it->x, it->y);
             }
 
             filter_state = IDLE;
             detect_queue.clear();
             velocity_queue.clear();
+            sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "]]\n");
+            send(sock, out, sendlen, 0);
         }
-        sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "]\n");
 
-        ssize_t r = send(sock, out, sendlen, 0);
         if (!(i%30)) {
             // heap_caps_print_heap_info(MALLOC_CAP_DEFAULT);
             ESP_LOGI(
                 TAG,
-                // "Time: %llu. %d (%d, %d - %d - %d) - %d - %d - %d",
-                "Time: %llu (%d) %d - %d - %d - %d (%d)",
+                "Time: %llu Frame: %d (%d) %d - (%d) - %d - %d (%d)",
                 fr_end - fr_start,
-                // fb->len,
-                // jpeg.getWidth(),
-                // jpeg.getHeight(),
-                // userdata.zero_points.size(),
+                i,
                 userdata.zero_points.capacity(),
-                // r,
                 filter_state,
-                detect_queue.size(),
+                centers.size(),
                 loser_bin.bin.size(),
                 loser_bin.prune(LOSER_BIN_LIFETIME_SECONDS),
                 v
