@@ -18,6 +18,12 @@
 #include "cos_lut.hpp"
 #include <sys/socket.h>
 #include <netdb.h>            // struct addrinfo
+#include "model.hpp"
+
+#include "tensorflow/lite/micro/micro_interpreter.h"
+#include "tensorflow/lite/micro/micro_log.h"
+#include "tensorflow/lite/micro/micro_mutable_op_resolver.h"
+#include "tensorflow/lite/schema/schema_generated.h"
 
 using namespace std;
 
@@ -44,9 +50,11 @@ using namespace std;
 static const char *TAG = "wand";
 
 uint8_t *out = NULL;
+uint8_t *image = NULL;
 JPEGDEC jpeg;
 
 #define OUT_BUFLEN 2048
+#define FINAL_IMAGE_SIZE 40*29
 
 #define RAW_FRAMES_SIZE 100
 #define FILTER_QUEUE_SIZE 3
@@ -63,6 +71,24 @@ typedef enum {
     DWELL,
     COMMIT
 } filter_state_t;
+
+#define TENSOR_ARENA_BYTES 20*1024
+TaskHandle_t inference_task_handle = NULL;
+const tflite::Model* model = nullptr;
+tflite::MicroInterpreter* interpreter = nullptr;
+TfLiteTensor* input_tensor = nullptr;
+static uint8_t *tensor_arena;
+
+vector<string> labels = {
+  "arresto-momentum",
+  "descendo",
+  "incendio",
+  "mimblewimble",
+  "locomotor",
+  "tarantallegra",
+  "gonadium",
+  "boofisium"
+};
 
 deque<vector<Point>> detect_queue;
 int idle_counter;
@@ -400,6 +426,105 @@ bool scale(std::vector<Point> const& orig, std::vector<Point>& scaled) {
     return true;
 }
 
+// Taken basically verbatim from: https://stackoverflow.com/a/14506390
+void draw_line(uint8_t *buf, int x0, int y0, int x1, int y1) {
+    int pixaddr = 0;
+    int dx = abs(x1 - x0);
+    int dy = abs(y1 - y0);
+    int sgnX = x0 < x1 ? 1 : -1;
+    int sgnY = y0 < y1 ? 1 : -1;
+    int e = 0;
+    for (int i=0; i < dx+dy; i++) {
+        pixaddr = x0 + (y0*40);
+        if (pixaddr >= (40*29)) {
+            ESP_LOGE(TAG, "pixaddr was: i=%d, x0=%d, y0=%d", pixaddr, x0, y0);
+            continue;
+        }
+        buf[pixaddr] = 255;
+        int e1 = e + dy;
+        int e2 = e - dx;
+        if (abs(e1) < abs(e2)) {
+            x0 += sgnX;
+            e = e1;
+        } else {
+            y0 += sgnY;
+            e = e2;
+        }
+    }
+}
+
+
+extern "C" void inference_task(void *params)
+{
+    model = tflite::GetModel(model_tflite);
+    if (model->version() != TFLITE_SCHEMA_VERSION) {
+        MicroPrintf("Model provided is schema version %d not equal to supported "
+                    "version %d.", model->version(), TFLITE_SCHEMA_VERSION);
+        return;
+    }
+    ESP_LOGI(TAG, "Model schema version: %lu", model->version());
+    tensor_arena = (uint8_t *) heap_caps_malloc(
+        TENSOR_ARENA_BYTES,
+        MALLOC_CAP_8BIT|MALLOC_CAP_SPIRAM
+    );
+    if (tensor_arena == NULL) {
+        ESP_LOGE(TAG, "Unable to allocate tensor_arena!");
+        return;
+    }
+
+    static tflite::MicroMutableOpResolver<6> micro_op_resolver;
+    micro_op_resolver.AddConv2D();
+    micro_op_resolver.AddMaxPool2D();
+    micro_op_resolver.AddQuantize();
+    micro_op_resolver.AddReshape();
+    micro_op_resolver.AddFullyConnected();
+    micro_op_resolver.AddSoftmax();
+
+    static tflite::MicroInterpreter static_interpreter(
+        model, micro_op_resolver, tensor_arena, TENSOR_ARENA_BYTES
+    );
+    interpreter = &static_interpreter;
+    TfLiteStatus allocate_status = interpreter->AllocateTensors();
+    if (allocate_status != kTfLiteOk) {
+        MicroPrintf("AllocateTensors() failed");
+        return;
+    }
+    input_tensor = interpreter->input(0);
+    MicroPrintf("Input tensor type: %d", input_tensor->type);
+    MicroPrintf("Input tensor dims size: %d", input_tensor->dims->size);
+    for (int i=0; i < input_tensor->dims->size; i++) {
+        MicroPrintf("Input tensor dims[%d]: %d", i, input_tensor->dims->data[i]);
+    }
+    MicroPrintf("Input tensor bytes: %d", input_tensor->bytes);
+
+    while(1) {
+        ulTaskNotifyTake(
+            pdTRUE,
+            portMAX_DELAY
+        );
+        ESP_LOGI(TAG, "Got image!");
+        memcpy(input_tensor->data.uint8, image, FINAL_IMAGE_SIZE);
+        if (kTfLiteOk != interpreter->Invoke()) {
+            ESP_LOGE(TAG, "Model invoke() failed.");
+        }
+        ESP_LOGI(TAG, "invoke done!");
+        TfLiteTensor* output_tensor = interpreter->output(0);
+        MicroPrintf("Output tensor type: %d", output_tensor->type);
+        MicroPrintf("Output tensor bytes: %d", output_tensor->bytes);
+        // Find the max index and map back to label
+        size_t max_i = 0;
+        uint8_t max_value = 0;
+        for (size_t i = 0; i < output_tensor->bytes; i++) {
+            uint8_t val = output_tensor->data.uint8[i];
+            if (val > max_value) {
+                max_value = val;
+                max_i = i;
+            }
+        }
+        ESP_LOGI(TAG, "Inference result: %d (%s)", max_i, labels[max_i].c_str());
+    }
+}
+
 extern "C" void app_main(void)
 {
     camera_config_t config;
@@ -436,6 +561,17 @@ extern "C" void app_main(void)
     config.jpeg_quality = 24;
     config.fb_count = 2;
 
+    ESP_LOGI(TAG, "Starting inference task on CPU1");
+    xTaskCreatePinnedToCore(
+        inference_task,
+        "INF",
+        3072,
+        NULL,
+        tskIDLE_PRIORITY,
+        &inference_task_handle,
+        1
+    );
+
     esp_err_t err = esp_camera_init(&config);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Camera init failed with error 0x%x", err);
@@ -459,6 +595,7 @@ extern "C" void app_main(void)
     int sock = do_connect();
 
     out = (uint8_t *)heap_caps_malloc(OUT_BUFLEN, (MALLOC_CAP_8BIT|MALLOC_CAP_SPIRAM));
+    image = (uint8_t *)heap_caps_malloc(FINAL_IMAGE_SIZE, (MALLOC_CAP_8BIT|MALLOC_CAP_SPIRAM));
 
     while(1) {
         uint64_t fr_start = esp_timer_get_time();
@@ -518,23 +655,59 @@ extern "C" void app_main(void)
         if (filter_state == COMMIT) {
             printf("Send\n");
             sendlen = 0;
-            sendlen = snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "[\"COMMIT\", [");
+            sendlen = snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "[\"COMMIT_IMG\", %d]\n", FINAL_IMAGE_SIZE);
+            send(sock, out, sendlen, 0);
             shrink_points.clear();
+            memset(image, 0, FINAL_IMAGE_SIZE);
             if (scale(path_point_queue, shrink_points)) {
+                Point prev_point(-1, -1);
                 for (auto it = shrink_points.begin(); it != shrink_points.end(); it++) {
-                    if (it != shrink_points.begin()) {
-                        sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, ",");
+                    if (prev_point.x == -1) {
+                        prev_point = *it;
+                        continue;
                     }
-                    sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "[%d, %d]", it->x, it->y);
+                    draw_line(
+                        image,
+                        prev_point.x,
+                        prev_point.y,
+                        it->x,
+                        it->y
+                    );
+                    prev_point = *it;
                 }
+            }
+            xTaskNotify(inference_task_handle, 0, eNoAction);
+            sendlen = 40 * 29;
+            while (sendlen > 0) {
+                sendlen -= send(sock, image+(40*29)-sendlen, 40, 0);
             }
 
             filter_state = IDLE;
             detect_queue.clear();
             velocity_queue.clear();
-            sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "]]\n");
-            send(sock, out, sendlen, 0);
         }
+
+        // if (filter_state == COMMIT) {
+        //     printf("Send\n");
+        //     sendlen = 0;
+        //     sendlen = snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "[\"COMMIT\", [");
+        //     shrink_points.clear();
+        //     if (scale(path_point_queue, shrink_points)) {
+        //         for (auto it = shrink_points.begin(); it != shrink_points.end(); it++) {
+        //             if (it != shrink_points.begin()) {
+        //                 sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, ",");
+        //             }
+        //             sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "[%d, %d]", it->x, it->y);
+        //         }
+        //     }
+
+        //     filter_state = IDLE;
+        //     detect_queue.clear();
+        //     velocity_queue.clear();
+        //     sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "]]\n");
+        //     send(sock, out, sendlen, 0);
+        // }
+
 
         if (!(i%30)) {
             // heap_caps_print_heap_info(MALLOC_CAP_DEFAULT);

@@ -12,6 +12,7 @@
                 "${config:idf.espAdfPathWin}/components/**",
                 "${workspaceFolder}/main/**",
                 "${workspaceFolder}/components/**",
+                "${workspaceFolder}/components/tflite-lib/tensorflow/lite/**",
                 "${workspaceFolder}/managed_components/**"
             ],
             "browse": {
@@ -24,6 +25,7 @@
                     "${workspaceFolder}/main/**",
                     "${workspaceFolder}/components",
                     "${workspaceFolder}/components/**",
+                    "${workspaceFolder}/components/tflite-lib/tensorflow/lite/**",
                     "${workspaceFolder}/managed_components",
                     "${workspaceFolder}/managed_components/**"
                 ],

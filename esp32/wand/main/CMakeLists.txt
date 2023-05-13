@@ -1,2 +1,2 @@
-idf_component_register(SRCS "blob_rect.cpp" "point.cpp" "main.cpp" "wifi.c"
+idf_component_register(SRCS "blob_rect.cpp" "point.cpp" "main.cpp" "wifi.c" "model.cpp"
                     INCLUDE_DIRS ".")
