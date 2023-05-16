@@ -62,8 +62,8 @@ JPEGDEC jpeg;
 #define FRAME_QUEUE_HW_MARK 10
 #define IDLE_FRAME_COUNT 30
 #define LOSER_BIN_BINSIZE 20
-#define LOSER_BIN_THRESHOLD 10
-#define LOSER_BIN_LIFETIME_SECONDS 10
+#define LOSER_BIN_THRESHOLD 5
+#define LOSER_BIN_LIFETIME_SECONDS 5
 
 typedef enum {
     IDLE,
@@ -521,7 +521,7 @@ extern "C" void inference_task(void *params)
                 max_i = i;
             }
         }
-        ESP_LOGI(TAG, "Inference result: %d (%s)", max_i, labels[max_i].c_str());
+        ESP_LOGI(TAG, "Inference result: %d -> %d (%s)", max_i, max_value, labels[max_i].c_str());
     }
 }
 
@@ -627,6 +627,24 @@ extern "C" void app_main(void)
         sendlen = snprintf((char *)out, OUT_BUFLEN, "[\"STAT\", %d, %d, %d]\n", filter_state, i, v);
         send(sock, out, sendlen, 0);
 
+
+        sendlen = 0;
+        sendlen = snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "[\"RECTS\", [");
+        for (auto rit = rects.begin(); rit != rects.end(); rit++) {
+            if (rit != rects.begin()) {
+                sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, ",");
+            }
+            sendlen += snprintf(
+                (char *)out+sendlen, OUT_BUFLEN-sendlen,
+                "[[%d, %d], [%d, %d]]",
+                rit->tl.x, rit->tl.y,
+                rit->br.x, rit->br.y
+            );
+        }
+        sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "]]\n");
+        send(sock, out, sendlen, 0);
+
+
         sendlen = 0;
         sendlen = snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "[\"WINNERS\", [");
         for (auto it = velocity_queue.begin(); it != velocity_queue.end(); it++) {
@@ -642,12 +660,12 @@ extern "C" void app_main(void)
         sendlen = snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "[\"LOSERS\", [");
         for (auto it = loser_bin.bin.begin(); it != loser_bin.bin.end(); it++) {
             if (it != loser_bin.bin.begin()) {
-                if (it->second < loser_bin.bin_threshold) {
+                if (loser_bin.bin_count[it->first] < loser_bin.bin_threshold) {
                     continue;
                 }
                 sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, ",");
             }
-            sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "[%d, %d]", it->first.x, it->first.y);
+            sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "[%d, %d, %d]", it->first.x, it->first.y, loser_bin.bin_count[it->first]);
         }
         sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "]]\n");
         send(sock, out, sendlen, 0);
@@ -675,8 +693,10 @@ extern "C" void app_main(void)
                     );
                     prev_point = *it;
                 }
+                xTaskNotify(inference_task_handle, 0, eNoAction);
+            } else {
+                ESP_LOGI(TAG, "Scale returned false!");
             }
-            xTaskNotify(inference_task_handle, 0, eNoAction);
             sendlen = 40 * 29;
             while (sendlen > 0) {
                 sendlen -= send(sock, image+(40*29)-sendlen, 40, 0);
@@ -687,36 +707,12 @@ extern "C" void app_main(void)
             velocity_queue.clear();
         }
 
-        // if (filter_state == COMMIT) {
-        //     printf("Send\n");
-        //     sendlen = 0;
-        //     sendlen = snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "[\"COMMIT\", [");
-        //     shrink_points.clear();
-        //     if (scale(path_point_queue, shrink_points)) {
-        //         for (auto it = shrink_points.begin(); it != shrink_points.end(); it++) {
-        //             if (it != shrink_points.begin()) {
-        //                 sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, ",");
-        //             }
-        //             sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "[%d, %d]", it->x, it->y);
-        //         }
-        //     }
-
-        //     filter_state = IDLE;
-        //     detect_queue.clear();
-        //     velocity_queue.clear();
-        //     sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "]]\n");
-        //     send(sock, out, sendlen, 0);
-        // }
-
-
         if (!(i%30)) {
-            // heap_caps_print_heap_info(MALLOC_CAP_DEFAULT);
             ESP_LOGI(
                 TAG,
-                "Time: %llu Frame: %d (%d) %d - (%d) - %d - %d (%d)",
+                "T:%llu F:%d S:%d C:%d LS:%d LP:%d V:%d",
                 fr_end - fr_start,
                 i,
-                userdata.zero_points.capacity(),
                 filter_state,
                 centers.size(),
                 loser_bin.bin.size(),
