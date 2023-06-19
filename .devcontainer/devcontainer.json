@@ -16,7 +16,7 @@
 
 	"mounts": [
 		"source=/tmp/.X11-unix/X0,target=/tmp/.X11-unix/X0,type=bind",
-		"source=cuda-12-python-9-cache,target=/home/vscode/.cache,type=volume"
+		"source=cuda-11-python-10-cache,target=/home/vscode/.cache,type=volume"
 	],
 
 	// Features to add to the dev container. More info: https://containers.dev/features.
@@ -32,7 +32,8 @@
 	// "customizations": {},
 	"extensions": [
 		"ms-python.python",
-		"ms-python.vscode-pylance"
+		"ms-python.vscode-pylance",
+		"ms-toolsai.jupyter"
 	],
 
 	// Uncomment to connect as root instead. More info: https://aka.ms/dev-containers-non-root.

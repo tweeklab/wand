@@ -125,6 +125,7 @@ def render(raw_data_grouped):
             # pass it through assuming it's the wand
             # There is safely only one point here so we can just index it
             # directly
+            # XXX noticed while porting...Is loser filtering already handled by filtering the raw keypoints?
             if not is_loser(frame_q[0][0]):
                 append_frame(frame_q[0][0])
             continue
@@ -136,13 +137,14 @@ def render(raw_data_grouped):
         if len(filtered_frames) == 0 and len(frame_q[0]) > 1:
             # print("Ambiguous start frame")
             for candidate in frame_q[0]:
+                # XXX noticed while porting...Is loser filtering already handled by filtering the raw keypoints?
                 if not is_loser(candidate):
                     append_frame(candidate)
             continue
 
         # The grid is made up the of the array indices for each frame so we can
         # easily locate the points in the queue that we need later on.
-        # This will always reference filtered_framts[-1] as the previous frame
+        # This will always reference filtered_frames[-1] as the previous frame
         # to create the first angle...
         grid = [
             x

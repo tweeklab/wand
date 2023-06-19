@@ -51,6 +51,7 @@ static const char *TAG = "wand";
 
 uint8_t *out = NULL;
 uint8_t *image = NULL;
+size_t image_pred = 0;
 JPEGDEC jpeg;
 
 #define OUT_BUFLEN 2048
@@ -74,6 +75,7 @@ typedef enum {
 
 #define TENSOR_ARENA_BYTES 20*1024
 TaskHandle_t inference_task_handle = NULL;
+TaskHandle_t camera_task_handle = NULL;
 const tflite::Model* model = nullptr;
 tflite::MicroInterpreter* interpreter = nullptr;
 TfLiteTensor* input_tensor = nullptr;
@@ -521,12 +523,13 @@ extern "C" void inference_task(void *params)
                 max_i = i;
             }
         }
-        ESP_LOGI(TAG, "Inference result: %d -> %d (%s)", max_i, max_value, labels[max_i].c_str());
+        image_pred = max_i;
+        xTaskNotifyGive(camera_task_handle);
+        ESP_LOGI(TAG, "Inference result: %d -> %d (%s)", image_pred, max_value, labels[image_pred].c_str());
     }
 }
 
-extern "C" void app_main(void)
-{
+extern "C" void camera_task(void *params) {
     camera_config_t config;
     camera_fb_t *fb = NULL;
     int i = 0;
@@ -560,17 +563,6 @@ extern "C" void app_main(void)
     config.fb_location = CAMERA_FB_IN_PSRAM;
     config.jpeg_quality = 24;
     config.fb_count = 2;
-
-    ESP_LOGI(TAG, "Starting inference task on CPU1");
-    xTaskCreatePinnedToCore(
-        inference_task,
-        "INF",
-        3072,
-        NULL,
-        tskIDLE_PRIORITY,
-        &inference_task_handle,
-        1
-    );
 
     esp_err_t err = esp_camera_init(&config);
     if (err != ESP_OK) {
@@ -671,10 +663,6 @@ extern "C" void app_main(void)
         send(sock, out, sendlen, 0);
 
         if (filter_state == COMMIT) {
-            printf("Send\n");
-            sendlen = 0;
-            sendlen = snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "[\"COMMIT_IMG\", %d]\n", FINAL_IMAGE_SIZE);
-            send(sock, out, sendlen, 0);
             shrink_points.clear();
             memset(image, 0, FINAL_IMAGE_SIZE);
             if (scale(path_point_queue, shrink_points)) {
@@ -693,18 +681,24 @@ extern "C" void app_main(void)
                     );
                     prev_point = *it;
                 }
-                xTaskNotify(inference_task_handle, 0, eNoAction);
+                xTaskNotifyGive(inference_task_handle);
             } else {
                 ESP_LOGI(TAG, "Scale returned false!");
-            }
-            sendlen = 40 * 29;
-            while (sendlen > 0) {
-                sendlen -= send(sock, image+(40*29)-sendlen, 40, 0);
             }
 
             filter_state = IDLE;
             detect_queue.clear();
             velocity_queue.clear();
+        }
+
+        if (ulTaskNotifyTake(pdTRUE, 0)) {
+            sendlen = 0;
+            sendlen = snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "[\"COMMIT_IMG\", %d, %d]\n", FINAL_IMAGE_SIZE, image_pred);
+            send(sock, out, sendlen, 0);
+            sendlen = 40 * 29;
+            while (sendlen > 0) {
+                sendlen -= send(sock, image+(40*29)-sendlen, 40, 0);
+            }
         }
 
         if (!(i%30)) {
@@ -721,4 +715,29 @@ extern "C" void app_main(void)
             );
         }
     }
+}
+
+extern "C" void app_main(void)
+{
+    ESP_LOGI(TAG, "Starting inference task on CPU1");
+    xTaskCreatePinnedToCore(
+        inference_task,
+        "INF",
+        3072,
+        NULL,
+        tskIDLE_PRIORITY,
+        &inference_task_handle,
+        1
+    );
+
+    ESP_LOGI(TAG, "Starting camera task on CPU0");
+    xTaskCreatePinnedToCore(
+        camera_task,
+        "INF",
+        6000,
+        NULL,
+        tskIDLE_PRIORITY+3,
+        &camera_task_handle,
+        0
+    );
 }
