@@ -48,6 +48,7 @@ class MyTCPHandler(socketserver.BaseRequestHandler):
 
         recv = ""
         pred = "None"
+        pred_score = "NA"
         cv2.imshow("Final", np.zeros((29, 40)))
         while True:
             # self.request is the TCP socket connected to the client
@@ -85,6 +86,7 @@ class MyTCPHandler(socketserver.BaseRequestHandler):
                 if d[0] == "COMMIT_IMG":
                     raw = bytes()
                     pred = reverse_label_map[d[2]]
+                    pred_score = d[3]
                     filename = f"images/esp32/live/{pred}/{uuid4()}.png"
                     print(f"Receiving {d[1]} bytes")
                     while len(raw) < d[1]:
@@ -133,7 +135,7 @@ class MyTCPHandler(socketserver.BaseRequestHandler):
                 )
                 cv2.putText(
                     output,
-                    pred,
+                    f"{pred} ({pred_score})",
                     (5, 80),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.4,

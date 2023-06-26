@@ -52,6 +52,7 @@ static const char *TAG = "wand";
 uint8_t *out = NULL;
 uint8_t *image = NULL;
 size_t image_pred = 0;
+uint8_t image_pred_score = 0;
 JPEGDEC jpeg;
 
 #define OUT_BUFLEN 2048
@@ -73,7 +74,7 @@ typedef enum {
     COMMIT
 } filter_state_t;
 
-#define TENSOR_ARENA_BYTES 20*1024
+#define TENSOR_ARENA_BYTES 50*1024
 TaskHandle_t inference_task_handle = NULL;
 TaskHandle_t camera_task_handle = NULL;
 const tflite::Model* model = nullptr;
@@ -524,8 +525,9 @@ extern "C" void inference_task(void *params)
             }
         }
         image_pred = max_i;
+        image_pred_score = max_value;
         xTaskNotifyGive(camera_task_handle);
-        ESP_LOGI(TAG, "Inference result: %d -> %d (%s)", image_pred, max_value, labels[image_pred].c_str());
+        ESP_LOGI(TAG, "Inference result: %d -> %d (%s)", image_pred, image_pred_score, labels[image_pred].c_str());
     }
 }
 
@@ -693,7 +695,7 @@ extern "C" void camera_task(void *params) {
 
         if (ulTaskNotifyTake(pdTRUE, 0)) {
             sendlen = 0;
-            sendlen = snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "[\"COMMIT_IMG\", %d, %d]\n", FINAL_IMAGE_SIZE, image_pred);
+            sendlen = snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "[\"COMMIT_IMG\", %d, %d, %d]\n", FINAL_IMAGE_SIZE, image_pred, image_pred_score);
             send(sock, out, sendlen, 0);
             sendlen = 40 * 29;
             while (sendlen > 0) {
