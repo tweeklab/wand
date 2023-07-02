@@ -1,7 +1,7 @@
 images/
 output/
-venv/
 logs/
+venv/
 __pycache__/
-model.tflite
-param_results.p
+**/model.tflite
+**/param_results.p

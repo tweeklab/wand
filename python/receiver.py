@@ -10,6 +10,10 @@ from PIL import Image
 import socket
 
 
+IMAGE_BASEDIR = os.path.expanduser("~/motion/images")
+LABELS_PATH = os.path.expanduser("~/motion/labels.yaml")
+
+
 class FilterState(Enum):
     IDLE = 0
     ACTIVE = 1
@@ -38,12 +42,12 @@ class MyTCPHandler(socketserver.BaseRequestHandler):
         frame_no = -1
         v = -1
 
-        with open("labels.yaml") as f:
+        with open(LABELS_PATH) as f:
             label_map = yaml.load(f, Loader=yaml.SafeLoader)['labels']
         reverse_label_map = {v: k for k, v in label_map.items()}
 
         for label in label_map:
-            p = f"images/esp32/live/{label}"
+            p = os.path.join(IMAGE_BASEDIR, f"esp32/live/{label}")
             os.makedirs(p, exist_ok=True)
 
         recv = ""
@@ -87,7 +91,7 @@ class MyTCPHandler(socketserver.BaseRequestHandler):
                     raw = bytes()
                     pred = reverse_label_map[d[2]]
                     pred_score = d[3]
-                    filename = f"images/esp32/live/{pred}/{uuid4()}.png"
+                    filename = os.path.join(IMAGE_BASEDIR, f"esp32/live/{pred}/{uuid4()}.png")
                     print(f"Receiving {d[1]} bytes")
                     while len(raw) < d[1]:
                         raw += self.request.recv(d[1] - len(raw))
