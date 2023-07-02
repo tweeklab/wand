@@ -453,8 +453,9 @@ bool scale(std::vector<Point> const& orig, std::vector<Point>& scaled) {
     pair minMaxY = std::minmax_element(orig.begin(), orig.end(), pointSortY);
     int xSize = minMaxX.second->x - minMaxX.first->x;
     int ySize = minMaxY.second->y - minMaxY.first->y;
-    if (xSize < 40 || ySize < 30)
-        return false;
+
+    PointBin filter_bin(LOSER_BIN_BINSIZE, 0);
+
     int scaleFactor = 10;
     if ((ySize*100)/296 < (xSize*100)/400) {
         // Scale X axis
@@ -466,6 +467,7 @@ bool scale(std::vector<Point> const& orig, std::vector<Point>& scaled) {
 
     for (auto it = orig.begin(); it != orig.end(); it++) {
         Point orig_point = *it;
+        filter_bin.add(orig_point);
         orig_point.x = orig_point.x - minMaxX.first->x;
         orig_point.y = orig_point.y - minMaxY.first->y;
         Point scaled_point(
@@ -476,7 +478,10 @@ bool scale(std::vector<Point> const& orig, std::vector<Point>& scaled) {
         scaled.push_back(scaled_point);
     }
 
-    return true;
+    if (filter_bin.bin.size() > 5) {
+        return true;
+    }
+    return false;
 }
 
 // Taken basically verbatim from: https://stackoverflow.com/a/14506390
@@ -756,13 +761,14 @@ extern "C" void camera_task(void *params) {
         if (!(i%30)) {
             ESP_LOGI(
                 TAG,
-                "T:%llu F:%d S:%d C:%d LS:%d LP:%d V:%d",
+                "T:%llu F:%d S:%d C:%d LS:%d LP:%d PPS:%d V:%d",
                 fr_end - fr_start,
                 i,
                 filter_state,
                 centers.size(),
                 loser_bin.bin.size(),
                 loser_bin.prune(LOSER_BIN_LIFETIME_SECONDS),
+                path_point_queue.size(),
                 v
             );
         }
