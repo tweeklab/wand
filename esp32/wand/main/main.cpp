@@ -64,6 +64,7 @@ JPEGDEC jpeg;
 #define FRAME_QUEUE_HW_MARK 10
 #define IDLE_FRAME_COUNT 30
 #define LOSER_BIN_BINSIZE 20
+#define MIN_IMAGE_BIN_COVERAGE 5
 #define LOSER_BIN_THRESHOLD 5
 #define LOSER_BIN_LIFETIME_SECONDS 5
 
@@ -478,7 +479,7 @@ bool scale(std::vector<Point> const& orig, std::vector<Point>& scaled) {
         scaled.push_back(scaled_point);
     }
 
-    if (filter_bin.bin.size() > 5) {
+    if (filter_bin.bin.size() > MIN_IMAGE_BIN_COVERAGE) {
         return true;
     }
     return false;
