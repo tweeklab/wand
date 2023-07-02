@@ -211,12 +211,29 @@ int compute_velocity_queue_displacement(void) {
     return norm_lut(vsum);
 }
 
+int compute_bin_depth(PointBin const& bin) {
+    using pair_type = decltype(bin.bin_count)::value_type;
+
+    // https://stackoverflow.com/a/9371137
+    auto pr = std::max_element
+    (
+        std::begin(bin.bin_count), std::end(bin.bin_count),
+        [] (const pair_type & p1, const pair_type & p2) {
+            return p1.second < p2.second;
+        }
+    );
+    return pr->second;
+}
+
 void filter() {
     int min_sum = INT32_MAX;
     int winner_sum = 0;
     vector<Point> winner_points;
     Point winner(-1, -1);
-    // Build test grids
+    int depth;
+    int min_depth = INT32_MAX; 
+
+    // Build test grid
     for (auto it1 = filter_queue[0].begin(); it1 != filter_queue[0].end(); it1++) {
         if (loser_bin.contains(*it1))
             continue;
@@ -226,6 +243,39 @@ void filter() {
             for (auto it3 = filter_queue[2].begin(); it3 != filter_queue[2].end(); it3++) {
                 if (loser_bin.contains(*it3))
                     continue;
+                // The code in this inner loop now runs for every possible point combination of:
+                // 1. The previous selected point
+                // 2. a combination of one point from each of the frames in the filter_queue
+                //    (3 frames worth)
+                // If the most recent frame is represented by k, then the points are:
+                // This looks like: selected_point -> k-2 -> k-1 -> k
+                // 4 points total per iteration
+
+                // Load all of the points from this iteration into a PointBin using
+                // the same bin size that we use for the loser bin.
+                // After that we check the PointBin to find the bin point with the
+                // most actual points in the iteration.  We call this the frame's point
+                // depth and the higher the depth, the more likely the iteration contains
+                // a combination we don't want because it means more of the points are in one
+                // spot.  This can happen if you have a persistent point of light in the frame
+                // that was not loser-binned.  In this case when the wand comes in, it's very
+                // likely that the wand points wind up being losers, because they are new
+                // and farther from the existing point.
+                // We can't just blindly filter points that are persistent because it interferes
+                // with the wand dwelling at the end of casting a spell which would look no
+                // different.  The method here favors an initially moving wand, by the time
+                // the wand stops, the true losers should have been filtered by then and so
+                // the stationary wand will be the only unfiltered point and you can hover forever
+                // since even though the point depth will be high, it will still be the lowest depth.
+                // It's the idea of the relativity of this measure that makes it work.
+                PointBin depth_bin(LOSER_BIN_BINSIZE, 0);
+                depth_bin.add(path_point_queue.back());
+                depth_bin.add(*it1);
+                depth_bin.add(*it2);
+                depth_bin.add(*it3);
+                depth = compute_bin_depth(depth_bin);
+                min_depth = std::min(min_depth, depth);
+
                 Point v0 = *it1 - path_point_queue.back();
                 Point v1 = *it2 - *it1;
                 Point v2 = *it3 - *it2;
@@ -233,7 +283,7 @@ void filter() {
                 int angle2 = atan2_lut(det(v1, v2), dot(v1, v2)) * norm_lut(v1);
                 int sum = (abs(angle1) + abs(angle2));
                 min_sum = std::min(min_sum, sum);
-                if (min_sum == sum) {
+                if (min_sum == sum && depth == min_depth) {
                     winner_points = {path_point_queue.back(), *it1, *it2, *it3};
                     winner = *it1;
                     winner_sum = sum;

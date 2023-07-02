@@ -83,6 +83,8 @@
         "thread": "cpp",
         "typeindex": "cpp",
         "typeinfo": "cpp",
-        "*.inc": "cpp"
+        "*.inc": "cpp",
+        "optional": "cpp",
+        "span": "cpp"
     }
 }

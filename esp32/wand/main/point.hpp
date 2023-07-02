@@ -55,7 +55,6 @@ class PointBin {
             half_bin_size(bin_size/2),
             bin_threshold(bin_threshold) {};
         inline Point bin_point(Point pt) {
-            // return Point(pt.x/bin_size, pt.y/bin_size);
             int halfbin_x = (pt.x / half_bin_size) * half_bin_size;
             int halfbin_y = (pt.y / half_bin_size) * half_bin_size;
             int bin_x = (pt.x/bin_size) * bin_size;
