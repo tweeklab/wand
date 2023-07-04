@@ -110,7 +110,8 @@ vector<string> labels = {
   "locomotor",
   "tarantallegra",
   "gonadium",
-  "boofisium"
+  "boofisium",
+  "discard"
 };
 
 deque<vector<Point>> detect_queue;
