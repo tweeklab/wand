@@ -1,5 +1,3 @@
 build/
-foo/
 managed_components/
-sdkconfig
 sdkconfig.old
