@@ -86,5 +86,6 @@
         "*.inc": "cpp",
         "optional": "cpp",
         "span": "cpp"
-    }
+    },
+    "idf.port": "/dev/ttyACM0"
 }
