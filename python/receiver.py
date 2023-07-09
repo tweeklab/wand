@@ -31,7 +31,8 @@ class MyTCPHandler(socketserver.BaseRequestHandler):
     """
 
     def handle(self):
-        print("Got one")
+        print("Connected.")
+        self.request.settimeout(1)
         self.recv_this_frame = 0
         self.data = b""
 
@@ -55,16 +56,15 @@ class MyTCPHandler(socketserver.BaseRequestHandler):
         pred_score = "NA"
         cv2.imshow("Final", np.zeros((29, 40)))
         while True:
-            # self.request is the TCP socket connected to the client
             try:
                 recv += self.request.recv(1, socket.MSG_DONTWAIT).decode("utf-8")
             except BlockingIOError:
                 pass
             except UnicodeDecodeError:
                 pass
-            except:
-                print(recv)
-                raise
+            except socket.timeout:
+                print("Client has gone away.  Aborting.")
+                return
             if "\n" in recv:
                 try:
                     end = recv.index("\n")
@@ -94,7 +94,11 @@ class MyTCPHandler(socketserver.BaseRequestHandler):
                     filename = os.path.join(IMAGE_BASEDIR, f"esp32/live/{pred}/{uuid4()}.png")
                     print(f"Receiving {d[1]} bytes")
                     while len(raw) < d[1]:
-                        raw += self.request.recv(d[1] - len(raw))
+                        try:
+                            raw += self.request.recv(d[1] - len(raw))
+                        except socket.timeout:
+                            print("Client has gone away.  Aborting.")
+                            return
                     final_image = np.array(list(raw), dtype=np.uint8).reshape(29, 40)
                     img = Image.fromarray(final_image)
                     img.save(filename, "png")
@@ -176,7 +180,6 @@ if __name__ == "__main__":
     HOST, PORT = "0.0.0.0", 3333
 
     # Create the server, binding to localhost on port 9999
+    socketserver.TCPServer.allow_reuse_address = True
     with socketserver.TCPServer((HOST, PORT), MyTCPHandler) as server:
-        # Activate the server; this will keep running until you
-        # interrupt the program with Ctrl-C
         server.serve_forever()
