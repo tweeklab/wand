@@ -1,6 +1,6 @@
 {
     "C_Cpp.intelliSenseEngine": "Tag Parser",
-    "idf.adapterTargetName": "esp32",
+    "idf.adapterTargetName": "esp32s3",
     "idf.customExtraPaths": "/opt/esp/tools/xtensa-esp-elf-gdb/11.2_20220823/xtensa-esp-elf-gdb/bin:/opt/esp/tools/riscv32-esp-elf-gdb/11.2_20220823/riscv32-esp-elf-gdb/bin:/opt/esp/tools/xtensa-esp32-elf/esp-2022r1-11.2.0/xtensa-esp32-elf/bin:/opt/esp/tools/xtensa-esp32s2-elf/esp-2022r1-11.2.0/xtensa-esp32s2-elf/bin:/opt/esp/tools/xtensa-esp32s3-elf/esp-2022r1-11.2.0/xtensa-esp32s3-elf/bin:/opt/esp/tools/riscv32-esp-elf/esp-2022r1-11.2.0/riscv32-esp-elf/bin:/opt/esp/tools/esp32ulp-elf/2.35_20220830/esp32ulp-elf/bin:/opt/esp/tools/cmake/3.24.0/bin:/opt/esp/tools/openocd-esp32/v0.11.0-esp32-20221026/openocd-esp32/bin:/opt/esp/tools/ninja/1.10.2",
     "idf.customExtraVars": "{\"OPENOCD_SCRIPTS\":\"/opt/esp/tools/openocd-esp32/v0.11.0-esp32-20221026/openocd-esp32/share/openocd/scripts\"}",
     "idf.espIdfPath": "/opt/esp/idf",

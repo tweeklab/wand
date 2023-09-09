@@ -7,6 +7,7 @@
 #include "esp_camera.h"
 #include "esp_timer.h"
 #include "esp_log.h"
+#include "driver/ledc.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -48,23 +49,34 @@ using namespace std;
 // #define LED_GPIO_NUM      4
 
 #define PWDN_GPIO_NUM     -1
-#define RESET_GPIO_NUM    -1
-#define XCLK_GPIO_NUM     10
-#define SIOD_GPIO_NUM     40
+#define RESET_GPIO_NUM    40
+#define XCLK_GPIO_NUM     14
+#define SIOD_GPIO_NUM     38
 #define SIOC_GPIO_NUM     39
 
-#define Y9_GPIO_NUM       48
-#define Y8_GPIO_NUM       11
+#define Y9_GPIO_NUM       47
+#define Y8_GPIO_NUM       13
 #define Y7_GPIO_NUM       12
-#define Y6_GPIO_NUM       14
+#define Y6_GPIO_NUM       10
 #define Y5_GPIO_NUM       16
 #define Y4_GPIO_NUM       18
 #define Y3_GPIO_NUM       17
 #define Y2_GPIO_NUM       15
-#define VSYNC_GPIO_NUM    38
-#define HREF_GPIO_NUM     47
-#define PCLK_GPIO_NUM     13
+#define VSYNC_GPIO_NUM    41
+#define HREF_GPIO_NUM     48
+#define PCLK_GPIO_NUM     11
 
+// IR Array Configs
+// GPIO
+#define IR_LED_GPIO_NUM 1
+// LED PWM Config
+#define LEDC_TIMER              LEDC_TIMER_0
+#define LEDC_MODE               LEDC_LOW_SPEED_MODE
+#define LEDC_OUTPUT_IO          (IR_LED_GPIO_NUM) // Define the output GPIO
+#define LEDC_CHANNEL            LEDC_CHANNEL_0
+#define LEDC_DUTY_RES           LEDC_TIMER_13_BIT // Set duty resolution to 13 bits
+#define LEDC_DUTY               (7000) // Set duty to 50%. ((2 ** 13) - 1) * 50% = 4095
+#define LEDC_FREQUENCY          (5000) // Frequency in Hertz. Set frequency at 5 kHz
 
 static const char *TAG = "wand";
 
@@ -533,6 +545,32 @@ void draw_line(uint8_t *buf, int x0, int y0, int x1, int y1) {
 }
 
 
+void ir_ledc_init(void)
+{
+    // Prepare and then apply the LEDC PWM timer configuration
+    ledc_timer_config_t ledc_timer = {
+        .speed_mode       = LEDC_MODE,
+        .duty_resolution  = LEDC_DUTY_RES,
+        .timer_num        = LEDC_TIMER,
+        .freq_hz          = LEDC_FREQUENCY,  // Set output frequency at 5 kHz
+        .clk_cfg          = LEDC_AUTO_CLK
+    };
+    ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer));
+
+    // Prepare and then apply the LEDC PWM channel configuration
+    ledc_channel_config_t ledc_channel = {
+        .gpio_num       = LEDC_OUTPUT_IO,
+        .speed_mode     = LEDC_MODE,
+        .channel        = LEDC_CHANNEL,
+        .intr_type      = LEDC_INTR_DISABLE,
+        .timer_sel      = LEDC_TIMER,
+        .duty           = 0, // Set duty to 0%
+        .hpoint         = 0
+    };
+    ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel));
+}
+
+
 extern "C" void inference_task(void *params)
 {
     model = tflite::GetModel(model_tflite);
@@ -616,8 +654,6 @@ extern "C" void camera_task(void *params) {
     std::vector<Rect> rects;
     std::vector<Point> shrink_points;
 
-    // config.ledc_channel = LEDC_CHANNEL_0;
-    // config.ledc_timer = LEDC_TIMER_0;
     config.pin_d0 = Y2_GPIO_NUM;
     config.pin_d1 = Y3_GPIO_NUM;
     config.pin_d2 = Y4_GPIO_NUM;
@@ -649,8 +685,8 @@ extern "C" void camera_task(void *params) {
     }
     sensor_t * s = esp_camera_sensor_get();
     ESP_LOGI(TAG, "Past camera init, PID is 0x%0X", s->id.PID);
-    s->set_vflip(s, 1);
-    // s->set_hmirror(s, 1);
+    // s->set_vflip(s, 1);
+    s->set_hmirror(s, 1);
     s->set_special_effect(s, 1);
 
     //Initialize NVS
@@ -663,6 +699,15 @@ extern "C" void camera_task(void *params) {
 
     wifi_init_sta();
     int sock = do_connect();
+
+
+    // IR LED Stuff
+    ir_ledc_init();
+    ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, LEDC_DUTY));
+    // Update duty to apply the new value
+    ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
+    // END IR LED
+
 
     out = (uint8_t *)heap_caps_malloc(OUT_BUFLEN, (MALLOC_CAP_8BIT|MALLOC_CAP_SPIRAM));
     image = (uint8_t *)heap_caps_malloc(FINAL_IMAGE_SIZE, (MALLOC_CAP_8BIT|MALLOC_CAP_SPIRAM));

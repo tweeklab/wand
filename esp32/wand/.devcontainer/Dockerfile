@@ -11,6 +11,7 @@ RUN apt-get update \
   libnuma1 \
   libpixman-1-0 \
   linux-tools-virtual \
+  dfu-util \
   && rm -rf /var/lib/apt/lists/*
 
 RUN update-alternatives --install /usr/local/bin/usbip usbip `ls /usr/lib/linux-tools/*/usbip | tail -n1` 20
