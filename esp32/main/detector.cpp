@@ -4,27 +4,33 @@
 #include <deque>
 #include <algorithm>
 #include <utility>
+
 #include "esp_camera.h"
 #include "esp_timer.h"
 #include "esp_log.h"
 #include "driver/ledc.h"
-#include "nvs_flash.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "wifi.h"
-#include "JPEGDEC.h"
-#include "blob_rect.hpp"
-#include "point.hpp"
-#include "atan_lut.hpp"
-#include "cos_lut.hpp"
+
 #include <sys/socket.h>
 #include <netdb.h>
-#include "model.hpp"
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/message_buffer.h"
+#include "freertos/event_groups.h"
 
 #include "tensorflow/lite/micro/micro_interpreter.h"
 #include "tensorflow/lite/micro/micro_log.h"
 #include "tensorflow/lite/micro/micro_mutable_op_resolver.h"
 #include "tensorflow/lite/schema/schema_generated.h"
+
+#include "JPEGDEC.h"
+#include "blob_rect.hpp"
+#include "point.hpp"
+#include "atan_lut.hpp"
+#include "cos_lut.hpp"
+#include "wifi.h"
+#include "detector.h"
+#include "model.hpp"
 
 using namespace std;
 
@@ -55,18 +61,20 @@ using namespace std;
 #define LEDC_OUTPUT_IO          (IR_LED_GPIO_NUM) // Define the output GPIO
 #define LEDC_CHANNEL            LEDC_CHANNEL_0
 #define LEDC_DUTY_RES           LEDC_TIMER_13_BIT // Set duty resolution to 13 bits
-#define LEDC_DUTY               (7000) // Set duty to 50%. ((2 ** 13) - 1) * 50% = 4095
+#define LEDC_DUTY               (8191) // Set duty to 50%. ((2 ** 13) - 1) * 50% = 4095
 #define LEDC_FREQUENCY          (5000) // Frequency in Hertz. Set frequency at 5 kHz
 
-static const char *TAG = "wand";
+static const char *TAG = "wand detector";
 
-uint8_t *out = NULL;
-uint8_t *image = NULL;
-size_t image_pred = 0;
-uint8_t image_pred_score = 0;
-JPEGDEC jpeg;
+static TaskHandle_t inference_task_handle = NULL;
+static TaskHandle_t camera_task_handle = NULL;
+static MessageBufferHandle_t ui_msgbuf_handle = NULL;
 
-#define OUT_BUFLEN 2048
+static uint8_t *image = NULL;
+static size_t image_pred = 0;
+static uint8_t image_pred_score = 0;
+static JPEGDEC jpeg;
+
 #define FINAL_IMAGE_SIZE 40*29
 
 #define RAW_FRAMES_SIZE 100
@@ -87,8 +95,6 @@ typedef enum {
 } filter_state_t;
 
 #define TENSOR_ARENA_BYTES 50*1024
-TaskHandle_t inference_task_handle = NULL;
-TaskHandle_t camera_task_handle = NULL;
 const tflite::Model* model = nullptr;
 tflite::MicroInterpreter* interpreter = nullptr;
 TfLiteTensor* input_tensor = nullptr;
@@ -401,37 +407,6 @@ void handle_incoming_frame(vector<Point> frame) {
     }
 }
 
-#define HOST_IP "10.0.0.30"
-#define PORT 3333
-static int do_connect(void)
-{
-        const char *host_ip = HOST_IP;
-        struct sockaddr_in dest_addr;
-        inet_pton(AF_INET, host_ip, &dest_addr.sin_addr);
-        dest_addr.sin_family = AF_INET;
-        dest_addr.sin_port = htons(PORT);
-
-        int sock =  socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
-        if (sock < 0) {
-            ESP_LOGE(TAG, "Unable to create socket: errno %d", errno);
-            return -1;
-        }
-        ESP_LOGI(TAG, "Socket created, connecting to %s:%d", host_ip, PORT);
-
-        int err = connect(sock, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
-        if (err != 0) {
-            ESP_LOGE(TAG, "Socket unable to connect: errno %d", errno);
-            return -1;
-        }
-
-        int val = 1;
-        setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &val, sizeof(val));
-        
-        ESP_LOGI(TAG, "Successfully connected");
-
-        return sock;
-}
-
 typedef struct {
     int height;
     int width;
@@ -599,15 +574,11 @@ extern "C" void inference_task(void *params)
             pdTRUE,
             portMAX_DELAY
         );
-        ESP_LOGI(TAG, "Got image!");
         memcpy(input_tensor->data.uint8, image, FINAL_IMAGE_SIZE);
         if (kTfLiteOk != interpreter->Invoke()) {
             ESP_LOGE(TAG, "Model invoke() failed.");
         }
-        ESP_LOGI(TAG, "invoke done!");
         TfLiteTensor* output_tensor = interpreter->output(0);
-        MicroPrintf("Output tensor type: %d", output_tensor->type);
-        MicroPrintf("Output tensor bytes: %d", output_tensor->bytes);
         // Find the max index and map back to label
         size_t max_i = 0;
         uint8_t max_value = 0;
@@ -621,7 +592,6 @@ extern "C" void inference_task(void *params)
         image_pred = max_i;
         image_pred_score = max_value;
         xTaskNotifyGive(camera_task_handle);
-        ESP_LOGI(TAG, "Inference result: %d -> %d (%s)", image_pred, image_pred_score, labels[image_pred].c_str());
     }
 }
 
@@ -629,6 +599,8 @@ extern "C" void camera_task(void *params) {
     camera_config_t config;
     camera_fb_t *fb = NULL;
     int i = 0;
+    char *status_data = NULL;
+    size_t status_len = 0;
     user_data_t userdata;
     std::vector<Point> centers;
     std::vector<Rect> rects;
@@ -669,17 +641,6 @@ extern "C" void camera_task(void *params) {
     s->set_hmirror(s, 1);
     s->set_special_effect(s, 1);
 
-    //Initialize NVS
-    esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-      ESP_ERROR_CHECK(nvs_flash_erase());
-      ret = nvs_flash_init();
-    }
-    ESP_ERROR_CHECK(ret);
-
-    wifi_init_sta();
-    int sock = do_connect();
-
 
     // IR LED Stuff
     ir_ledc_init();
@@ -689,7 +650,7 @@ extern "C" void camera_task(void *params) {
     // END IR LED
 
 
-    out = (uint8_t *)heap_caps_malloc(OUT_BUFLEN, (MALLOC_CAP_8BIT|MALLOC_CAP_SPIRAM));
+    status_data = (char *)heap_caps_malloc(STATUS_DATA_BUFLEN, (MALLOC_CAP_8BIT|MALLOC_CAP_SPIRAM));
     image = (uint8_t *)heap_caps_malloc(FINAL_IMAGE_SIZE, (MALLOC_CAP_8BIT|MALLOC_CAP_SPIRAM));
 
     while(1) {
@@ -718,52 +679,52 @@ extern "C" void camera_task(void *params) {
 
         i++;
 
-        size_t sendlen = 0;
-        sendlen = snprintf((char *)out, OUT_BUFLEN, "[\"STAT\", %d, %d, %d]\n", filter_state, i, v);
-        send(sock, out, sendlen, 0);
+        status_len = 0;
+        status_len = snprintf(
+            (char *)status_data, STATUS_DATA_BUFLEN,
+            "{\"type\": \"status\", \"filter_state\": %d, \"frame\": %d, \"velocity\": %d}\n", filter_state, i, v
+        );
+        xMessageBufferSend(ui_msgbuf_handle, status_data, status_len+1, 0);
 
 
-        sendlen = 0;
-        sendlen = snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "[\"RECTS\", [");
-        for (auto rit = rects.begin(); rit != rects.end(); rit++) {
-            if (rit != rects.begin()) {
-                sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, ",");
+        status_len = 0;
+        status_len = snprintf((char *)status_data+status_len, STATUS_DATA_BUFLEN-status_len,
+                                "{ \"type\": \"winners\", \"points\": [");
+        for (auto it = path_point_queue.begin(); it != path_point_queue.end(); it++) {
+            if (it != path_point_queue.begin()) {
+                status_len += snprintf((char *)status_data+status_len, STATUS_DATA_BUFLEN-status_len, ",");
             }
-            sendlen += snprintf(
-                (char *)out+sendlen, OUT_BUFLEN-sendlen,
-                "[[%d, %d], [%d, %d]]",
-                rit->tl.x, rit->tl.y,
-                rit->br.x, rit->br.y
-            );
+            status_len += snprintf((char *)status_data+status_len, STATUS_DATA_BUFLEN-status_len, "[%d, %d]", it->x, it->y);
         }
-        sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "]]\n");
-        send(sock, out, sendlen, 0);
+        status_len += snprintf((char *)status_data+status_len, STATUS_DATA_BUFLEN-status_len, "]}\n");
+        xMessageBufferSend(ui_msgbuf_handle, status_data, status_len+1, 0);
 
 
-        sendlen = 0;
-        sendlen = snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "[\"WINNERS\", [");
-        for (auto it = velocity_queue.begin(); it != velocity_queue.end(); it++) {
-            if (it != velocity_queue.begin()) {
-                sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, ",");
+        status_len = 0;
+        status_len = snprintf((char *)status_data+status_len, STATUS_DATA_BUFLEN-status_len,
+                                "{ \"type\": \"centers\", \"points\": [");
+        for (auto it = centers.begin(); it != centers.end(); it++) {
+            if (it != centers.begin()) {
+                status_len += snprintf((char *)status_data+status_len, STATUS_DATA_BUFLEN-status_len, ",");
             }
-            sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "[%d, %d]", it->x, it->y);
+            status_len += snprintf((char *)status_data+status_len, STATUS_DATA_BUFLEN-status_len, "[%d, %d]", it->x, it->y);
         }
-        sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "]]\n");
-        send(sock, out, sendlen, 0);
+        status_len += snprintf((char *)status_data+status_len, STATUS_DATA_BUFLEN-status_len, "]}\n");
+        xMessageBufferSend(ui_msgbuf_handle, status_data, status_len+1, 0);
 
-        sendlen = 0;
-        sendlen = snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "[\"LOSERS\", [");
-        for (auto it = loser_bin.bin.begin(); it != loser_bin.bin.end(); it++) {
-            if (it != loser_bin.bin.begin()) {
-                if (loser_bin.bin_count[it->first] < loser_bin.bin_threshold) {
-                    continue;
-                }
-                sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, ",");
-            }
-            sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "[%d, %d, %d]", it->first.x, it->first.y, loser_bin.bin_count[it->first]);
+
+        if (ulTaskNotifyTake(pdTRUE, 0)) {
+            // sendlen = 0;
+            // sendlen = snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "[\"COMMIT_IMG\", %d, %d, %d]\n", FINAL_IMAGE_SIZE, image_pred, image_pred_score);
+            // send(sock, out, sendlen, 0);
+            // sendlen = 40 * 29;
+            // while (sendlen > 0) {
+            //     sendlen -= send(sock, image+(40*29)-sendlen, 40, 0);
+            // }
+            snprintf(status_data, STATUS_DATA_BUFLEN, "{\"type\": \"inference\", \"prob\": %d, \"label\": \"%s\"}", image_pred_score, labels[image_pred].c_str());
+            ESP_LOGI(TAG, "Inference result: %d -> %d (%s)", image_pred, image_pred_score, labels[image_pred].c_str());
+            xMessageBufferSend(ui_msgbuf_handle, status_data, strlen(status_data)+1, 0);
         }
-        sendlen += snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "]]\n");
-        send(sock, out, sendlen, 0);
 
         if (filter_state == COMMIT) {
             shrink_points.clear();
@@ -786,62 +747,44 @@ extern "C" void camera_task(void *params) {
                 }
                 xTaskNotifyGive(inference_task_handle);
             } else {
-                ESP_LOGI(TAG, "Scale returned false!");
+                ESP_LOGI(TAG, "Drop uninteresting image!");
             }
 
             filter_state = IDLE;
             detect_queue.clear();
             velocity_queue.clear();
         }
-
-        if (ulTaskNotifyTake(pdTRUE, 0)) {
-            sendlen = 0;
-            sendlen = snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "[\"COMMIT_IMG\", %d, %d, %d]\n", FINAL_IMAGE_SIZE, image_pred, image_pred_score);
-            send(sock, out, sendlen, 0);
-            sendlen = 40 * 29;
-            while (sendlen > 0) {
-                sendlen -= send(sock, image+(40*29)-sendlen, 40, 0);
-            }
-        }
-
-        if (!(i%30)) {
-            ESP_LOGI(
-                TAG,
-                "T:%llu F:%d S:%d C:%d LS:%d LP:%d PPS:%d V:%d",
-                fr_end - fr_start,
-                i,
-                filter_state,
-                centers.size(),
-                loser_bin.bin.size(),
-                loser_bin.prune(LOSER_BIN_LIFETIME_SECONDS),
-                path_point_queue.size(),
-                v
-            );
-        }
     }
 }
 
-extern "C" void app_main(void)
+    
+void start_detector_tasks(MessageBufferHandle_t msgbuf)
 {
-    ESP_LOGI(TAG, "Starting inference task on CPU1");
-    xTaskCreatePinnedToCore(
-        inference_task,
-        "INF",
-        3072,
-        NULL,
-        tskIDLE_PRIORITY,
-        &inference_task_handle,
-        1
-    );
+    ui_msgbuf_handle = msgbuf;
+    if (inference_task_handle == NULL) {
+        ESP_LOGI(TAG, "Starting inference task on CPU1");
+        xTaskCreatePinnedToCore(
+            inference_task,
+            "INF",
+            3072,
+            NULL,
+            tskIDLE_PRIORITY+10,
+            &inference_task_handle,
+            1
+        );
+    }
 
-    ESP_LOGI(TAG, "Starting camera task on CPU0");
-    xTaskCreatePinnedToCore(
-        camera_task,
-        "INF",
-        6000,
-        NULL,
-        tskIDLE_PRIORITY+3,
-        &camera_task_handle,
-        0
-    );
+    if (camera_task_handle == NULL) {
+        ESP_LOGI(TAG, "Starting camera task on CPU1");
+        xTaskCreatePinnedToCore(
+            camera_task,
+            "CAM",
+            15000,
+            NULL,
+            tskIDLE_PRIORITY+15,
+            &camera_task_handle,
+            1
+        );
+    }
 }
+    

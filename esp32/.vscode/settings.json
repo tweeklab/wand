@@ -85,7 +85,13 @@
         "typeinfo": "cpp",
         "*.inc": "cpp",
         "optional": "cpp",
-        "span": "cpp"
+        "span": "cpp",
+        "event_groups.h": "c",
+        "err.h": "c",
+        "ui_html.h": "c",
+        "esp_http_server.h": "c",
+        "message_buffer.h": "c",
+        "task.h": "c"
     },
     "idf.port": "/dev/ttyACM0"
 }

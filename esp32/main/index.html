@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Wand Console</title>
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.6.4/jquery.min.js"></script>
+    <script type="text/javascript" src="jquery.sparkline.js"></script>
+</head>
+
+<body>
+    <div>
+        <h1>Wand Console</h1>
+    </div>
+    <div style="width: 60%">
+        <div>
+            <h2>Current Status</h2>
+            <p style="font-size: 24pt">Spell: <span id="label">NA</span> (<span id="prob">0</span>)</p>
+            <p>Filter State: <span id="filter_state">NA</span> Frame: <span id="frame">NA</span></p>
+            <p><button id="button" class="button">Reset</button></p>
+        </div>
+        <div style="display: flex">
+            <div style="flex: 1; margin-right: 5px;">
+                <h2>Raw Wand Points</h2>
+                <canvas id="centers" width="400" height="296" style="border:1px solid #680505;" ></canvas>
+            </div>
+            <div style="flex: 1">
+                <h2>Wand Path (post-filter)</h2>
+                <canvas id="winners" width="400" height="296" style="border:1px solid #680505;" ></canvas>
+            </div>
+        </div>
+    </div>
+    <script>
+        // $('#compositebar').sparkline('html', { type: 'bar', barColor: '#aaf' });
+        // $('#compositebar').sparkline([4,1,5,7,9,9,8,7,6,6,4,7,8,4,3,2,2,5,6,7], { composite: true, fillColor: false, lineColor: 'red' });
+
+        var stream_gateway = `ws://${window.location.hostname}:${parseInt(window.location.port)+1}/ws`;
+        var control_gateway = `ws://${window.location.hostname}:${window.location.port}/control`;
+        var stream_websocket;
+        var control_websocket;
+
+        var winners = document.getElementById("winners");
+        var winners_ctx = winners.getContext("2d");
+
+        var centers = document.getElementById("centers");
+        var centers_ctx = centers.getContext("2d");
+
+        // Stream
+        function initStreamWebSocket() {
+            console.log('Trying to open stream WS connection...');
+            stream_websocket = new WebSocket(stream_gateway);
+            stream_websocket.onopen = onOpenStream;
+            stream_websocket.onclose = onCloseStream;
+            stream_websocket.onmessage = onStreamMessage;
+
+        }
+        function onOpenStream(event) {
+            console.log('Stream connection opened');
+        }
+        function onCloseStream(event) {
+            console.log('Stream connection closed');
+            setTimeout(initStreamWebSocket, 2000);
+        }
+        function onStreamMessage(event) {
+            data = JSON.parse(event.data);
+            if (data.type == "inference") {
+                document.getElementById('label').innerHTML = data.label;
+                document.getElementById('prob').innerHTML = data.prob;
+            } else if (data.type == "winners") {
+                winners_ctx.reset();
+                for (point of data.points) {
+                    winners_ctx.beginPath();
+                    winners_ctx.arc(point[0], point[1], 2, 0, 2 * Math.PI);
+                    winners_ctx.fill();
+                }
+            } else if (data.type == "centers") {
+                centers_ctx.reset();
+                for (point of data.points) {
+                    centers_ctx.beginPath();
+                    centers_ctx.arc(point[0], point[1], 2, 0, 2 * Math.PI);
+                    centers_ctx.fill();
+                }
+            } else if (data.type == "status") {
+                document.getElementById('filter_state').innerHTML = data.filter_state;
+                document.getElementById('frame').innerHTML = data.frame;
+            }
+        }
+
+        // Control
+        function initControlWebSocket() {
+            console.log('Trying to open control WS connection...');
+            control_websocket = new WebSocket(control_gateway);
+            control_websocket.onopen = onOpenControl;
+            control_websocket.onclose = onCloseControl;
+        }
+        function onOpenControl(event) {
+            console.log('Control connection opened');
+            initButton();
+        }
+        function onCloseControl(event) {
+            console.log('Control connection closed');
+            setTimeout(initControlWebSocket, 2000);
+        }
+
+        function initButton() {
+            document.getElementById('button').addEventListener('click', reset);
+        }
+        function reset(){
+            console.log("Reset count")
+            control_websocket.send('reset');
+        }
+
+        // Initial start
+        window.addEventListener('load', onLoad);
+        function onLoad(event) {
+            initStreamWebSocket();
+            initControlWebSocket();
+        }
+    </script>
+</body>
+
+</html>
