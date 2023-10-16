@@ -3,8 +3,49 @@
 
 <head>
     <title>Wand Console</title>
-    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.6.4/jquery.min.js"></script>
-    <script type="text/javascript" src="jquery.sparkline.js"></script>
+    <style>
+        input[type=checkbox]{
+            height: 0;
+            width: 0;
+            visibility: hidden;
+        }
+
+        label {
+            cursor: pointer;
+            text-indent: -9999px;
+            width: 45px;
+            height: 20px;
+            background: grey;
+            display: inline-flex;
+            border-radius: 10px;
+            position: relative;
+        }
+
+        label:after {
+            content: '';
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 17px;
+            height: 17px;
+            background: #fff;
+            border-radius: 8px;
+            transition: 0.3s;
+        }
+
+        input:checked + label {
+            background: #bada55;
+        }
+
+        input:checked + label:after {
+            left: calc(100% - 5px);
+            transform: translateX(-100%);
+        }
+
+        label:active:after {
+            width: 30px;
+        }
+    </style>
 </head>
 
 <body>
@@ -13,29 +54,30 @@
     </div>
     <div style="width: 60%">
         <div>
-            <h2>Current Status</h2>
-            <p style="font-size: 24pt">Spell: <span id="label">NA</span> (<span id="prob">0</span>)</p>
-            <p>Filter State: <span id="filter_state">NA</span> Frame: <span id="frame">NA</span></p>
+            <p style="font-size: 20pt">Spell: <span id="label">NA</span> (<span id="prob">0</span>)</p>
+            <p>Filter State: <span id="filter_state">NA</span> Frame: <span id="frame">NA</span> Velocity: <span id="velocity">NA</span></p>
             <p><button id="button" class="button">Reset</button></p>
         </div>
         <div style="display: flex">
-            <div style="flex: 1; margin-right: 5px;">
-                <h2>Raw Wand Points</h2>
-                <canvas id="centers" width="400" height="296" style="border:1px solid #680505;" ></canvas>
+            <div  style="flex: 1">
+                <span style="font-size: 20pt; font-weight: bold;">Raw Video</span>
+                <input id="toggle_enable_video" type="checkbox"/>
+                <label for="toggle_enable_video"></label>
+                <img id="video_monitor" src=""/>
+            </div>    
+            <div style="flex: 1">
+                <span style="font-size: 20pt; font-weight: bold;">Raw Wand Points</span>
+                <canvas id="centers" width="640" height="480" style="border:1px solid #680505;" ></canvas>
             </div>
             <div style="flex: 1">
-                <h2>Wand Path (post-filter)</h2>
-                <canvas id="winners" width="400" height="296" style="border:1px solid #680505;" ></canvas>
+                <span style="font-size: 20pt; font-weight: bold;">Wand Path (post-filter)</span>
+                <canvas id="winners" width="640" height="480" style="border:1px solid #680505;" ></canvas>
             </div>
         </div>
     </div>
     <script>
-        // $('#compositebar').sparkline('html', { type: 'bar', barColor: '#aaf' });
-        // $('#compositebar').sparkline([4,1,5,7,9,9,8,7,6,6,4,7,8,4,3,2,2,5,6,7], { composite: true, fillColor: false, lineColor: 'red' });
-
-        var stream_gateway = `ws://${window.location.hostname}:${parseInt(window.location.port)+1}/ws`;
-        var control_gateway = `ws://${window.location.hostname}:${window.location.port}/control`;
-        var stream_websocket;
+        // var control_gateway = `ws://${window.location.hostname}:${window.location.port}/control`;
+        var control_gateway = `ws://10.0.128.30:80/control`;
         var control_websocket;
 
         var winners = document.getElementById("winners");
@@ -44,23 +86,36 @@
         var centers = document.getElementById("centers");
         var centers_ctx = centers.getContext("2d");
 
-        // Stream
-        function initStreamWebSocket() {
-            console.log('Trying to open stream WS connection...');
-            stream_websocket = new WebSocket(stream_gateway);
-            stream_websocket.onopen = onOpenStream;
-            stream_websocket.onclose = onCloseStream;
-            stream_websocket.onmessage = onStreamMessage;
+        var video_monitor = document.getElementById("video_monitor");
+        var video_monitor_togggle = document.getElementById("toggle_enable_video");
+
+
+        video_monitor_togggle.onchange = function(event) {
+            if (event.target.checked) {
+                // video_monitor.src = `http://${window.location.hostname}:8080/video_stream`;
+                video_monitor.src = `http://10.0.128.30:8080/video_stream`;
+            } else {
+                video_monitor.src = "";
+            }
+        }
+
+        function initControlWebSocket() {
+            console.log('Trying to open point stream WS connection...');
+            control_websocket = new WebSocket(control_gateway);
+            control_websocket.onopen = onOpenControl;
+            control_websocket.onclose = onCloseControl;
+            control_websocket.onmessage = onControlMessage;
 
         }
-        function onOpenStream(event) {
-            console.log('Stream connection opened');
+        function onOpenControl(event) {
+            console.log('Control connection opened');
+            initButton();
         }
-        function onCloseStream(event) {
-            console.log('Stream connection closed');
-            setTimeout(initStreamWebSocket, 2000);
+        function onCloseControl(event) {
+            console.log('Control connection closed');
+            setTimeout(initControlWebSocket, 2000);
         }
-        function onStreamMessage(event) {
+        function onControlMessage(event) {
             data = JSON.parse(event.data);
             if (data.type == "inference") {
                 document.getElementById('label').innerHTML = data.label;
@@ -76,29 +131,19 @@
                 centers_ctx.reset();
                 for (point of data.points) {
                     centers_ctx.beginPath();
+                    if (point[2]) {
+                        centers_ctx.fillStyle = "#ff0000";
+                    } else {
+                        centers_ctx.fillStyle = "#000000";
+                    }
                     centers_ctx.arc(point[0], point[1], 2, 0, 2 * Math.PI);
                     centers_ctx.fill();
                 }
             } else if (data.type == "status") {
                 document.getElementById('filter_state').innerHTML = data.filter_state;
                 document.getElementById('frame').innerHTML = data.frame;
+                document.getElementById('velocity').innerHTML = data.velocity;
             }
-        }
-
-        // Control
-        function initControlWebSocket() {
-            console.log('Trying to open control WS connection...');
-            control_websocket = new WebSocket(control_gateway);
-            control_websocket.onopen = onOpenControl;
-            control_websocket.onclose = onCloseControl;
-        }
-        function onOpenControl(event) {
-            console.log('Control connection opened');
-            initButton();
-        }
-        function onCloseControl(event) {
-            console.log('Control connection closed');
-            setTimeout(initControlWebSocket, 2000);
         }
 
         function initButton() {
@@ -112,7 +157,7 @@
         // Initial start
         window.addEventListener('load', onLoad);
         function onLoad(event) {
-            initStreamWebSocket();
+            video_monitor_togggle.checked = false;
             initControlWebSocket();
         }
     </script>

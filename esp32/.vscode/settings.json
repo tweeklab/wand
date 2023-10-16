@@ -91,7 +91,9 @@
         "ui_html.h": "c",
         "esp_http_server.h": "c",
         "message_buffer.h": "c",
-        "task.h": "c"
+        "task.h": "c",
+        "control.h": "c"
     },
-    "idf.port": "/dev/ttyACM0"
+    "idf.port": "/dev/ttyACM0",
+    "idf.flashType": "UART"
 }

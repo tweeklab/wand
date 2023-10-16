@@ -7,12 +7,7 @@
 #include "detector.h"
 #include "ui_server.h"
 
-#define UI_MSGBUF_SIZE 10240
-
 static const char *TAG = "wand control";
-static MessageBufferHandle_t ui_msgbuf_handle;
-static uint8_t *ui_msgbuf_memory = NULL;
-static StaticMessageBuffer_t ui_msgbuf_struct;
 static bool has_ip = false;
 
 ESP_EVENT_DEFINE_BASE(WANDC_EVENT_BASE);
@@ -22,18 +17,9 @@ void handle_ip_stack_ready(void* handler_arg, esp_event_base_t base, int32_t id,
 {
     if (!has_ip) {
         ESP_LOGI(TAG, "IP stack is up");
-        ui_msgbuf_memory = (uint8_t *) heap_caps_malloc(
-            UI_MSGBUF_SIZE,
-            MALLOC_CAP_8BIT|MALLOC_CAP_SPIRAM
-        );
-        ui_msgbuf_handle = xMessageBufferCreateStatic(
-            UI_MSGBUF_SIZE,
-            ui_msgbuf_memory,
-            &ui_msgbuf_struct
-        );
 
-        start_ui_server(ui_msgbuf_handle);
-        start_detector_tasks(ui_msgbuf_handle);
+        start_ui_server();
+        start_detector_tasks();
         has_ip = true;
     }
 }

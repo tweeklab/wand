@@ -16,7 +16,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/message_buffer.h"
-#include "freertos/event_groups.h"
+#include "freertos/semphr.h"
 
 #include "tensorflow/lite/micro/micro_interpreter.h"
 #include "tensorflow/lite/micro/micro_log.h"
@@ -68,7 +68,11 @@ static const char *TAG = "wand detector";
 
 static TaskHandle_t inference_task_handle = NULL;
 static TaskHandle_t camera_task_handle = NULL;
-static MessageBufferHandle_t ui_msgbuf_handle = NULL;
+
+static MessageBufferHandle_t point_msgbuf_handle = NULL;
+SemaphoreHandle_t point_stream_mutex;
+static MessageBufferHandle_t video_msgbuf_handle = NULL;
+SemaphoreHandle_t video_stream_mutex;
 
 static uint8_t *image = NULL;
 static size_t image_pred = 0;
@@ -79,13 +83,13 @@ static JPEGDEC jpeg;
 
 #define RAW_FRAMES_SIZE 100
 #define FILTER_QUEUE_SIZE 3
-#define VELOCITY_QUEUE_SIZE 10
-#define FRAME_QUEUE_HW_MARK 10
-#define IDLE_FRAME_COUNT 30
-#define LOSER_BIN_BINSIZE 20
+#define VELOCITY_QUEUE_SIZE 5
+#define FRAME_QUEUE_HW_MARK 2
+#define IDLE_FRAME_COUNT 15
+#define LOSER_BIN_BINSIZE 32
 #define MIN_IMAGE_BIN_COVERAGE 5
 #define LOSER_BIN_THRESHOLD 5
-#define LOSER_BIN_LIFETIME_SECONDS 5
+#define LOSER_BIN_LIFETIME_SECONDS 8
 
 typedef enum {
     IDLE,
@@ -376,7 +380,11 @@ void handle_incoming_frame(vector<Point> frame) {
             ++idle_counter;
         }
     } else {
-        bounded_deque_push_back(detect_queue, tmp_pts, RAW_FRAMES_SIZE);
+        if (filter_state == IDLE) {
+            bounded_deque_push_back(detect_queue, tmp_pts, VELOCITY_QUEUE_SIZE*2);
+        } else {
+            bounded_deque_push_back(detect_queue, tmp_pts, RAW_FRAMES_SIZE);
+        }
         idle_counter = 0;
     }
 
@@ -384,7 +392,11 @@ void handle_incoming_frame(vector<Point> frame) {
         filter_state = IDLE;
         detect_queue.clear();
         velocity_queue.clear();
+        path_point_queue.clear();
     }
+
+    if (idle_counter > 0)
+        return;
 
     if ((++frame_counter % FRAME_QUEUE_HW_MARK) == 0) {
         path_point_queue.clear();
@@ -424,7 +436,7 @@ int drawMCUs(JPEGDRAW *pDraw)
 
     for (int y = top; y < bottom; y+=user->width) {
         for (int x = 0; x < pDraw->iWidth; x++) {
-            pixel = (pIn[x] > 2 ? 255 : 0);
+            pixel = (pIn[x] > 5 ? 255 : 0);
             if (pixel == 0) {
                 if (user->zero_points.size() < 512) {
                     user->zero_points.push_back(Point(pDraw->x + x, y/user->width));
@@ -444,13 +456,13 @@ bool scale(std::vector<Point> const& orig, std::vector<Point>& scaled) {
 
     PointBin filter_bin(LOSER_BIN_BINSIZE, 0);
 
-    int scaleFactor = 10;
-    if ((ySize*100)/296 < (xSize*100)/400) {
+    int scaleFactor = 16;
+    if ((ySize*100)/480 < (xSize*100)/640) {
         // Scale X axis
-        scaleFactor = 1 + (10*xSize)/400;
+        scaleFactor = 1 + (16*xSize)/640;
     } else {
         // Scale Y axis
-        scaleFactor = 1 + (10*ySize)/296;
+        scaleFactor = 1 + (16*ySize)/480;
     }
 
     for (auto it = orig.begin(); it != orig.end(); it++) {
@@ -601,6 +613,7 @@ extern "C" void camera_task(void *params) {
     int i = 0;
     char *status_data = NULL;
     size_t status_len = 0;
+    uint8_t *buf_save;
     user_data_t userdata;
     std::vector<Point> centers;
     std::vector<Rect> rects;
@@ -623,7 +636,7 @@ extern "C" void camera_task(void *params) {
     config.pin_pwdn = PWDN_GPIO_NUM;
     config.pin_reset = RESET_GPIO_NUM;
     config.xclk_freq_hz = 20000000;
-    config.frame_size = FRAMESIZE_CIF;
+    config.frame_size = FRAMESIZE_VGA;
     config.pixel_format = PIXFORMAT_JPEG;
     config.grab_mode = CAMERA_GRAB_LATEST;
     config.fb_location = CAMERA_FB_IN_PSRAM;
@@ -645,16 +658,14 @@ extern "C" void camera_task(void *params) {
     // IR LED Stuff
     ir_ledc_init();
     ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, LEDC_DUTY));
-    // Update duty to apply the new value
     ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
     // END IR LED
 
 
-    status_data = (char *)heap_caps_malloc(STATUS_DATA_BUFLEN, (MALLOC_CAP_8BIT|MALLOC_CAP_SPIRAM));
+    status_data = (char *)heap_caps_malloc(POINT_DATA_BUFLEN, (MALLOC_CAP_8BIT|MALLOC_CAP_SPIRAM));
     image = (uint8_t *)heap_caps_malloc(FINAL_IMAGE_SIZE, (MALLOC_CAP_8BIT|MALLOC_CAP_SPIRAM));
 
     while(1) {
-        uint64_t fr_start = esp_timer_get_time();
         fb = esp_camera_fb_get();
 
         jpeg.openRAM((uint8_t *)fb->buf, fb->len, drawMCUs);
@@ -664,7 +675,7 @@ extern "C" void camera_task(void *params) {
         userdata.zero_points.clear();
         jpeg.setUserPointer(&userdata);
         jpeg.decode(0,0,0);
-
+        jpeg.close();
 
         findBlobRects(userdata.zero_points, rects);
         centers.clear();
@@ -673,57 +684,72 @@ extern "C" void camera_task(void *params) {
         }
 
         handle_incoming_frame(centers);
-        uint64_t fr_end = esp_timer_get_time();
-        jpeg.close();
+        loser_bin.prune(LOSER_BIN_LIFETIME_SECONDS);
+        
+        if (xSemaphoreTake(video_stream_mutex, (100/portTICK_PERIOD_MS)) == pdTRUE) {
+            if (video_msgbuf_handle && xMessageBufferIsEmpty(video_msgbuf_handle)) {
+                buf_save = fb->buf;
+                fb->buf = (uint8_t *)heap_caps_malloc(
+                    fb->len,
+                    (MALLOC_CAP_8BIT|MALLOC_CAP_SPIRAM)
+                );
+                memcpy(fb->buf, buf_save, fb->len);
+                if (xMessageBufferSend(video_msgbuf_handle, fb, sizeof(camera_fb_t), 0) == 0) {
+                    heap_caps_free(fb->buf);
+                    ESP_LOGW(TAG, "Unable to send frame");
+                }
+                fb->buf = buf_save;
+            }
+            xSemaphoreGive(video_stream_mutex);
+        }
         esp_camera_fb_return(fb);
 
         i++;
 
-        status_len = 0;
-        status_len = snprintf(
-            (char *)status_data, STATUS_DATA_BUFLEN,
-            "{\"type\": \"status\", \"filter_state\": %d, \"frame\": %d, \"velocity\": %d}\n", filter_state, i, v
-        );
-        xMessageBufferSend(ui_msgbuf_handle, status_data, status_len+1, 0);
+        if (xSemaphoreTake(point_stream_mutex, (100/portTICK_PERIOD_MS)) == pdTRUE) {
+            if (point_msgbuf_handle) {
+                status_len = 0;
+                status_len = snprintf(
+                    (char *)status_data, POINT_DATA_BUFLEN,
+                    "{\"type\": \"status\", \"filter_state\": %d, \"frame\": %d, \"velocity\": %d}\n", filter_state, i, v
+                );
+                xMessageBufferSend(point_msgbuf_handle, status_data, status_len+1, 0);
 
 
-        status_len = 0;
-        status_len = snprintf((char *)status_data+status_len, STATUS_DATA_BUFLEN-status_len,
-                                "{ \"type\": \"winners\", \"points\": [");
-        for (auto it = path_point_queue.begin(); it != path_point_queue.end(); it++) {
-            if (it != path_point_queue.begin()) {
-                status_len += snprintf((char *)status_data+status_len, STATUS_DATA_BUFLEN-status_len, ",");
+                status_len = 0;
+                status_len = snprintf((char *)status_data+status_len, POINT_DATA_BUFLEN-status_len,
+                                        "{ \"type\": \"winners\", \"points\": [");
+                for (auto it = path_point_queue.begin(); it != path_point_queue.end(); it++) {
+                    if (it != path_point_queue.begin()) {
+                        status_len += snprintf((char *)status_data+status_len, POINT_DATA_BUFLEN-status_len, ",");
+                    }
+                    status_len += snprintf((char *)status_data+status_len, POINT_DATA_BUFLEN-status_len, "[%d, %d]", it->x, it->y);
+                }
+                status_len += snprintf((char *)status_data+status_len, POINT_DATA_BUFLEN-status_len, "]}\n");
+                xMessageBufferSend(point_msgbuf_handle, status_data, status_len+1, 0);
+
+
+                status_len = 0;
+                status_len = snprintf((char *)status_data+status_len, POINT_DATA_BUFLEN-status_len,
+                                        "{ \"type\": \"centers\", \"points\": [");
+                for (auto it = centers.begin(); it != centers.end(); it++) {
+                    if (it != centers.begin()) {
+                        status_len += snprintf((char *)status_data+status_len, POINT_DATA_BUFLEN-status_len, ",");
+                    }
+                    status_len += snprintf((char *)status_data+status_len, POINT_DATA_BUFLEN-status_len, "[%d, %d, %s]", it->x, it->y, (loser_bin.contains(*it) ? "true" : "false"));
+                }
+                status_len += snprintf((char *)status_data+status_len, POINT_DATA_BUFLEN-status_len, "]}\n");
+                xMessageBufferSend(point_msgbuf_handle, status_data, status_len+1, 0);
             }
-            status_len += snprintf((char *)status_data+status_len, STATUS_DATA_BUFLEN-status_len, "[%d, %d]", it->x, it->y);
-        }
-        status_len += snprintf((char *)status_data+status_len, STATUS_DATA_BUFLEN-status_len, "]}\n");
-        xMessageBufferSend(ui_msgbuf_handle, status_data, status_len+1, 0);
 
-
-        status_len = 0;
-        status_len = snprintf((char *)status_data+status_len, STATUS_DATA_BUFLEN-status_len,
-                                "{ \"type\": \"centers\", \"points\": [");
-        for (auto it = centers.begin(); it != centers.end(); it++) {
-            if (it != centers.begin()) {
-                status_len += snprintf((char *)status_data+status_len, STATUS_DATA_BUFLEN-status_len, ",");
+            if (ulTaskNotifyTake(pdTRUE, 0)) {
+                ESP_LOGI(TAG, "Inference result: %d -> %d (%s)", image_pred, image_pred_score, labels[image_pred].c_str());
+                if (point_msgbuf_handle) {
+                    snprintf(status_data, POINT_DATA_BUFLEN, "{\"type\": \"inference\", \"prob\": %d, \"label\": \"%s\"}", image_pred_score, labels[image_pred].c_str());
+                    xMessageBufferSend(point_msgbuf_handle, status_data, strlen(status_data)+1, 0);
+                }
             }
-            status_len += snprintf((char *)status_data+status_len, STATUS_DATA_BUFLEN-status_len, "[%d, %d]", it->x, it->y);
-        }
-        status_len += snprintf((char *)status_data+status_len, STATUS_DATA_BUFLEN-status_len, "]}\n");
-        xMessageBufferSend(ui_msgbuf_handle, status_data, status_len+1, 0);
-
-
-        if (ulTaskNotifyTake(pdTRUE, 0)) {
-            // sendlen = 0;
-            // sendlen = snprintf((char *)out+sendlen, OUT_BUFLEN-sendlen, "[\"COMMIT_IMG\", %d, %d, %d]\n", FINAL_IMAGE_SIZE, image_pred, image_pred_score);
-            // send(sock, out, sendlen, 0);
-            // sendlen = 40 * 29;
-            // while (sendlen > 0) {
-            //     sendlen -= send(sock, image+(40*29)-sendlen, 40, 0);
-            // }
-            snprintf(status_data, STATUS_DATA_BUFLEN, "{\"type\": \"inference\", \"prob\": %d, \"label\": \"%s\"}", image_pred_score, labels[image_pred].c_str());
-            ESP_LOGI(TAG, "Inference result: %d -> %d (%s)", image_pred, image_pred_score, labels[image_pred].c_str());
-            xMessageBufferSend(ui_msgbuf_handle, status_data, strlen(status_data)+1, 0);
+            xSemaphoreGive(point_stream_mutex);
         }
 
         if (filter_state == COMMIT) {
@@ -758,9 +784,11 @@ extern "C" void camera_task(void *params) {
 }
 
     
-void start_detector_tasks(MessageBufferHandle_t msgbuf)
+void start_detector_tasks(void)
 {
-    ui_msgbuf_handle = msgbuf;
+    point_stream_mutex = xSemaphoreCreateMutex();
+    video_stream_mutex = xSemaphoreCreateMutex();
+
     if (inference_task_handle == NULL) {
         ESP_LOGI(TAG, "Starting inference task on CPU1");
         xTaskCreatePinnedToCore(
@@ -768,7 +796,7 @@ void start_detector_tasks(MessageBufferHandle_t msgbuf)
             "INF",
             3072,
             NULL,
-            tskIDLE_PRIORITY+10,
+            tskIDLE_PRIORITY+18,
             &inference_task_handle,
             1
         );
@@ -781,10 +809,29 @@ void start_detector_tasks(MessageBufferHandle_t msgbuf)
             "CAM",
             15000,
             NULL,
-            tskIDLE_PRIORITY+15,
+            tskIDLE_PRIORITY+17,
             &camera_task_handle,
             1
         );
     }
 }
-    
+
+void set_detector_point_stream_buffer(MessageBufferHandle_t msgbuf)
+{
+    if (xSemaphoreTake(point_stream_mutex, (500/portTICK_PERIOD_MS)) == pdTRUE) {
+        point_msgbuf_handle = msgbuf;
+        xSemaphoreGive(point_stream_mutex);
+    } else {
+        ESP_LOGW(TAG, "Timed out setting point_stream_buffer");
+    }
+}
+
+void set_detector_video_stream_buffer(MessageBufferHandle_t msgbuf)
+{
+    if (xSemaphoreTake(video_stream_mutex, (500/portTICK_PERIOD_MS)) == pdTRUE) {
+        video_msgbuf_handle = msgbuf;
+        xSemaphoreGive(video_stream_mutex);
+    } else {
+        ESP_LOGW(TAG, "Timed out setting video_stream_buffer");
+    }
+}

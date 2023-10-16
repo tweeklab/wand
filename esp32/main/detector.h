@@ -1,17 +1,15 @@
 #ifndef __DETECTOR_H
 #define __DETECTOR_H
 
-#include "freertos/message_buffer.h"
-
-#define STATUS_DATA_BUFLEN 2048
+#define POINT_DATA_BUFLEN 2048
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-void start_detector_tasks(MessageBufferHandle_t msgbuf);
-void enable_status_stream(void);
-void disable_status_stream(void);
+void start_detector_tasks(void);
+void set_detector_point_stream_buffer(MessageBufferHandle_t);
+void set_detector_video_stream_buffer(MessageBufferHandle_t);
 
 #ifdef __cplusplus
 };
