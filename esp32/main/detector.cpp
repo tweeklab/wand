@@ -381,6 +381,9 @@ void handle_incoming_frame(vector<Point> frame) {
         }
     } else {
         if (filter_state == IDLE) {
+            // When idle, only save enough frames to be able to compute
+            // velocity.  Save a bit extra in case some frames are filtered
+            // due to having no interesting points
             bounded_deque_push_back(detect_queue, tmp_pts, VELOCITY_QUEUE_SIZE*2);
         } else {
             bounded_deque_push_back(detect_queue, tmp_pts, RAW_FRAMES_SIZE);
