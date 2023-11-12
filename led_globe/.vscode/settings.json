@@ -6,10 +6,12 @@
         "reportMissingModuleSource": "none"
     },
     "python.analysis.typeshedPaths": [
-        ".vscode/Pico-W-Stub"
+        ".vscode/Pico-W-Stub",
+        ".vscode\\Pico-W-Stub"
     ],
     "python.analysis.extraPaths": [
-        ".vscode/Pico-W-Stub"
+        ".vscode/Pico-W-Stub",
+        ".vscode\\Pico-W-Stub"
     ],
     "micropico.syncFolder": "",
     "micropico.openOnStart": true

@@ -5,3 +5,4 @@ venv/
 __pycache__/
 **/model.tflite
 **/param_results.p
+led_globe/wifi_config.py

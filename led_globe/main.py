@@ -1,5 +1,3 @@
-# Example using PIO to drive a set of WS2812 LEDs.
-
 import array
 import time
 import os
@@ -7,10 +5,9 @@ from machine import Pin
 import rp2
 import network
 import urequests
+from wifi_config import WIFI_SSID, WIFI_PASSWORD
 
 FW_URL = "http://10.0.0.30:4545/globe_firmware.py"
-WIFI_SSID = ""
-WIFI_PASSWORD = ""
 NUM_LEDS = 200
 PIN_NUM = 22
 
@@ -69,6 +66,7 @@ def connect():
     wlan.connect(WIFI_SSID, WIFI_PASSWORD)
     while wlan.isconnected() is False:
         print("Waiting for connection...")
+        time.sleep(1)
     ip = wlan.ifconfig()[0]
     print(f"Connected on {ip}")
     set_led_status(INIT_WIFI_CONNECTED)
@@ -101,6 +99,7 @@ def fw_update():
         pass
     os.rename("/firmware_tmp.py", "firmware.py")
 
+    print("Firmware update succeeded.")
     return new_fw_main
 
 
