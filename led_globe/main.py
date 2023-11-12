@@ -1,6 +1,7 @@
 # Example using PIO to drive a set of WS2812 LEDs.
 
-import array, time
+import array
+import time
 import os
 from machine import Pin
 import rp2
@@ -8,24 +9,31 @@ import network
 import urequests
 
 FW_URL = "http://10.0.0.30:4545/globe_firmware.py"
-WIFI_SSID = ''
-WIFI_PASSWORD = ''
+WIFI_SSID = ""
+WIFI_PASSWORD = ""
 NUM_LEDS = 200
 PIN_NUM = 22
 
-@rp2.asm_pio(sideset_init=rp2.PIO.OUT_LOW, out_shiftdir=rp2.PIO.SHIFT_LEFT, autopull=True, pull_thresh=24)
+
+@rp2.asm_pio(
+    sideset_init=rp2.PIO.OUT_LOW,
+    out_shiftdir=rp2.PIO.SHIFT_LEFT,
+    autopull=True,
+    pull_thresh=24,
+)
 def ws2812():
     T1 = 2
     T2 = 5
     T3 = 3
     wrap_target()
     label("bitloop")
-    out(x, 1)               .side(0)    [T3 - 1]
-    jmp(not_x, "do_zero")   .side(1)    [T1 - 1]
-    jmp("bitloop")          .side(1)    [T2 - 1]
+    out(x, 1).side(0)[T3 - 1]
+    jmp(not_x, "do_zero").side(1)[T1 - 1]
+    jmp("bitloop").side(1)[T2 - 1]
     label("do_zero")
-    nop()                   .side(0)    [T2 - 1]
+    nop().side(0)[T2 - 1]
     wrap()
+
 
 # Create the StateMachine with the ws2812 program, outputting on pin
 sm = rp2.StateMachine(0, ws2812, freq=8_000_000, sideset_base=Pin(PIN_NUM))
@@ -45,24 +53,27 @@ INIT_FW_UPDATE_FAIL = (20, 0, 20)
 INIT_FW_LOADED = (0, 20, 0)
 INIT_FW_LOAD_FAIL = (20, 0, 0)
 
+
 ##########################################################################
 def set_led_status(status):
     for i in range(len(led_values)):
-        led_values[i] = (status[2]<<16) + (status[0]<<8) + status[1]
+        led_values[i] = (status[2] << 16) + (status[0] << 8) + status[1]
     sm.put(led_values, 8)
     time.sleep_ms(10)
+
 
 def connect():
     set_led_status(INIT_WIFI_CONNECTING)
     wlan = network.WLAN(network.STA_IF)
     wlan.active(True)
     wlan.connect(WIFI_SSID, WIFI_PASSWORD)
-    while wlan.isconnected() == False:
-        print('Waiting for connection...')
+    while wlan.isconnected() is False:
+        print("Waiting for connection...")
     ip = wlan.ifconfig()[0]
-    print(f'Connected on {ip}')
+    print(f"Connected on {ip}")
     set_led_status(INIT_WIFI_CONNECTED)
     return ip
+
 
 def fw_update():
     print(f"Checking for firmware at {FW_URL}")
@@ -81,16 +92,17 @@ def fw_update():
         from firmware_tmp import main as new_fw_main
     except Exception as e:
         print(f"Firmware load failed: {e}")
-        os.unlink('/firmware_tmp.py')
+        os.unlink("/firmware_tmp.py")
         return None
 
     try:
-        os.unlink('/firmware.py')
+        os.unlink("/firmware.py")
     except:
         pass
-    os.rename('/firmware_tmp.py', 'firmware.py')
+    os.rename("/firmware_tmp.py", "firmware.py")
 
     return new_fw_main
+
 
 def fw_load():
     set_led_status(INIT_FW_UPDATING)
@@ -110,6 +122,7 @@ def fw_load():
 
     return fw_main
 
+
 def bootloader():
     time.sleep(1)
     ip = connect()
@@ -125,5 +138,6 @@ def bootloader():
     else:
         set_led_status(INIT_FW_LOAD_FAIL)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     bootloader()
