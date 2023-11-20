@@ -92,7 +92,9 @@
         "esp_http_server.h": "c",
         "message_buffer.h": "c",
         "task.h": "c",
-        "control.h": "c"
+        "control.h": "c",
+        "esp_event.h": "c",
+        "esp_netif_sntp.h": "c"
     },
     "idf.port": "/dev/ttyACM0",
     "idf.flashType": "UART"

@@ -30,6 +30,7 @@
 #include "cos_lut.hpp"
 #include "wifi.h"
 #include "detector.h"
+#include "control.h"
 #include "model.hpp"
 
 using namespace std;
@@ -70,9 +71,9 @@ static TaskHandle_t inference_task_handle = NULL;
 static TaskHandle_t camera_task_handle = NULL;
 
 static MessageBufferHandle_t point_msgbuf_handle = NULL;
-SemaphoreHandle_t point_stream_mutex;
+SemaphoreHandle_t point_stream_mutex = NULL;
 static MessageBufferHandle_t video_msgbuf_handle = NULL;
-SemaphoreHandle_t video_stream_mutex;
+SemaphoreHandle_t video_stream_mutex = NULL;
 
 static uint8_t *image = NULL;
 static size_t image_pred = 0;
@@ -439,7 +440,7 @@ int drawMCUs(JPEGDRAW *pDraw)
 
     for (int y = top; y < bottom; y+=user->width) {
         for (int x = 0; x < pDraw->iWidth; x++) {
-            pixel = (pIn[x] > 5 ? 255 : 0);
+            pixel = (pIn[x] > 2 ? 255 : 0);
             if (pixel == 0) {
                 if (user->zero_points.size() < 512) {
                     user->zero_points.push_back(Point(pDraw->x + x, y/user->width));
@@ -621,6 +622,7 @@ extern "C" void camera_task(void *params) {
     std::vector<Point> centers;
     std::vector<Rect> rects;
     std::vector<Point> shrink_points;
+    wand_status_change_t wand_status_change_data;
 
     config.pin_d0 = Y2_GPIO_NUM;
     config.pin_d1 = Y3_GPIO_NUM;
@@ -751,6 +753,21 @@ extern "C" void camera_task(void *params) {
                     snprintf(status_data, POINT_DATA_BUFLEN, "{\"type\": \"inference\", \"prob\": %d, \"label\": \"%s\"}", image_pred_score, labels[image_pred].c_str());
                     xMessageBufferSend(point_msgbuf_handle, status_data, strlen(status_data)+1, 0);
                 }
+                memset(&wand_status_change_data, 0, sizeof(wand_status_change_data));
+                if (labels[image_pred] == "discard") {
+                    wand_status_change_data.status = WAND_STATUS_PATTERN_DISCARD;
+                } else {
+                    wand_status_change_data.status = WAND_STATUS_PATTERN_MATCH;
+                    wand_status_change_data.pattern = labels[image_pred].c_str();
+                }
+                esp_event_post_to(
+                    wandc_loop,
+                    WANDC_EVENT_BASE,
+                    WANDC_EVENT_WAND_STATUS_CHANGE,
+                    &wand_status_change_data,
+                    sizeof(wand_status_change_data),
+                    portTICK_PERIOD_MS
+                );
             }
             xSemaphoreGive(point_stream_mutex);
         }
@@ -821,6 +838,9 @@ void start_detector_tasks(void)
 
 void set_detector_point_stream_buffer(MessageBufferHandle_t msgbuf)
 {
+    if (!point_stream_mutex) {
+        return;
+    }
     if (xSemaphoreTake(point_stream_mutex, (500/portTICK_PERIOD_MS)) == pdTRUE) {
         point_msgbuf_handle = msgbuf;
         xSemaphoreGive(point_stream_mutex);
@@ -831,6 +851,9 @@ void set_detector_point_stream_buffer(MessageBufferHandle_t msgbuf)
 
 void set_detector_video_stream_buffer(MessageBufferHandle_t msgbuf)
 {
+    if (!video_stream_mutex) {
+        return;
+    }
     if (xSemaphoreTake(video_stream_mutex, (500/portTICK_PERIOD_MS)) == pdTRUE) {
         video_msgbuf_handle = msgbuf;
         xSemaphoreGive(video_stream_mutex);

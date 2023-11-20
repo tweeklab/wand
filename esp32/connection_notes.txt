@@ -1,2 +1,2 @@
- New-NetFireWallRule -DisplayName 'WSL 2 Firewall Unlock' -Direction Inbound -LocalPort 3333 -Action Allow -Protocol TCP
- netsh interface portproxy add v4tov4 listenport=3333 listenaddress=10.0.0.30 connectport=3333 connectaddress=172.23.223.183
+ New-NetFireWallRule -DisplayName 'WSL Display Firmware Download' -Direction Inbound -LocalPort 4545 -Action Allow -Protocol TCP
+ netsh interface portproxy add v4tov4 listenport=4545 listenaddress=10.0.0.30 connectport=4545 connectaddress=$(bash -c "hostname -I")
