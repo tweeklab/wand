@@ -1,5 +1,6 @@
 import array
 import time
+import random
 import os
 from machine import Pin
 import rp2
@@ -41,7 +42,7 @@ sm.active(1)
 # Display a pattern on the LEDs via an array of LED RGB values.
 led_values = array.array("I", [0 for _ in range(NUM_LEDS)])
 
-INIT_MAIN_EXIT = (5, 0, 0)
+INIT_FAIL = (5, 0, 0)
 INIT_WIFI_CONNECTING = (0, 0, 20)
 INIT_WIFI_CONNECTED = (0, 20, 20)
 INIT_FW_UPDATING = (20, 20, 0)
@@ -52,21 +53,36 @@ INIT_FW_LOAD_FAIL = (20, 0, 0)
 
 
 ##########################################################################
-def set_led_status(status):
+def set_led_status(status, count=NUM_LEDS):
     for i in range(len(led_values)):
+        led_values[i] = 0
+    for i in range(len(led_values)):
+        if i == (count-1):
+            break
         led_values[i] = (status[2] << 16) + (status[0] << 8) + status[1]
     sm.put(led_values, 8)
-    time.sleep_ms(10)
+    time.sleep_us(100)
 
 
 def connect():
-    set_led_status(INIT_WIFI_CONNECTING)
+    max_wait_ms = 6000
+    wait_decrement = 200
+    time_to_wait = random.randint(0, max_wait_ms)
     wlan = network.WLAN(network.STA_IF)
+    wlan.active(False)
+    for i in range(time_to_wait, 0, -wait_decrement):
+        set_led_status(INIT_WIFI_CONNECTING, count = int(i//60))
+        time.sleep_ms(wait_decrement)
+    set_led_status(INIT_WIFI_CONNECTING)
     wlan.active(True)
     wlan.connect(WIFI_SSID, WIFI_PASSWORD)
-    while wlan.isconnected() is False:
+    for _ in range(10):
         print("Waiting for connection...")
+        if wlan.isconnected() is True:
+            break
         time.sleep(1)
+    if wlan.isconnected() is False:
+        raise Exception("Timed out waiting for WiFi")
     ip = wlan.ifconfig()[0]
     print(f"Connected on {ip}")
     set_led_status(INIT_WIFI_CONNECTED)
@@ -123,9 +139,7 @@ def fw_load():
 
 
 def bootloader():
-    time.sleep(1)
     ip = connect()
-
     fw_main = fw_load()
     if fw_main:
         set_led_status(INIT_FW_LOADED)
@@ -133,10 +147,16 @@ def bootloader():
             fw_main(sm, ip)
         except Exception as e:
             print(f"main raised exception: {e}")
-        set_led_status(INIT_MAIN_EXIT)
+        set_led_status(INIT_FAIL)
     else:
         set_led_status(INIT_FW_LOAD_FAIL)
 
 
 if __name__ == "__main__":
-    bootloader()
+    while True:
+        try:
+            bootloader()
+        except Exception as e:
+            print(f"Boot fail: {e}")
+            set_led_status(INIT_FAIL)
+            time.sleep(1)
