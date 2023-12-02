@@ -292,13 +292,13 @@ void filter() {
                 // the stationary wand will be the only unfiltered point and you can hover forever
                 // since even though the point depth will be high, it will still be the lowest depth.
                 // It's the idea of the relativity of this measure that makes it work.
-                PointBin depth_bin(LOSER_BIN_BINSIZE, 0);
-                depth_bin.add(path_point_queue.back());
-                depth_bin.add(*it1);
-                depth_bin.add(*it2);
-                depth_bin.add(*it3);
-                depth = compute_bin_depth(depth_bin);
-                min_depth = std::min(min_depth, depth);
+                // PointBin depth_bin(LOSER_BIN_BINSIZE, 0);
+                // depth_bin.add(path_point_queue.back());
+                // depth_bin.add(*it1);
+                // depth_bin.add(*it2);
+                // depth_bin.add(*it3);
+                // depth = compute_bin_depth(depth_bin);
+                // min_depth = std::min(min_depth, depth);
 
                 Point v0 = *it1 - path_point_queue.back();
                 Point v1 = *it2 - *it1;
@@ -307,7 +307,8 @@ void filter() {
                 int angle2 = atan2_lut(det(v1, v2), dot(v1, v2)) * norm_lut(v1);
                 int sum = (abs(angle1) + abs(angle2));
                 min_sum = std::min(min_sum, sum);
-                if (min_sum == sum && depth == min_depth) {
+                // if (min_sum == sum && depth == min_depth) {
+                if (min_sum == sum) {
                     winner_points = {path_point_queue.back(), *it1, *it2, *it3};
                     winner = *it1;
                     winner_sum = sum;
@@ -431,6 +432,8 @@ typedef struct {
 
 int drawMCUs(JPEGDRAW *pDraw)
 {
+    static uint8_t prev_min = 0;
+    uint8_t current_min = 255;
     uint8_t *pIn = (uint8_t *)pDraw->pPixels;
     user_data_t *user = (user_data_t *)pDraw->pUser;
     uint8_t pixel;
@@ -438,9 +441,21 @@ int drawMCUs(JPEGDRAW *pDraw)
     int top = pDraw->y * user->width;
     int bottom = top + (pDraw->iHeight * user->width);
 
+    uint8_t thres = prev_min + 2;
     for (int y = top; y < bottom; y+=user->width) {
+        // for (int x = 0; x < pDraw->iWidth; x++) {
+        //     pixel = (pIn[x] > 2 ? 255 : 0);
+        //     if (pixel == 0) {
+        //         if (user->zero_points.size() < 512) {
+        //             user->zero_points.push_back(Point(pDraw->x + x, y/user->width));
+        //         }
+        //     }
+        // }
         for (int x = 0; x < pDraw->iWidth; x++) {
-            pixel = (pIn[x] > 2 ? 255 : 0);
+            if (pIn[x] < current_min) {
+                current_min = pIn[x];
+            }
+            pixel = (pIn[x] > thres ? 255 : 0);
             if (pixel == 0) {
                 if (user->zero_points.size() < 512) {
                     user->zero_points.push_back(Point(pDraw->x + x, y/user->width));
