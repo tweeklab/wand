@@ -1,11 +1,32 @@
 import array, time
 import random
 import socket
+import select
 import json
 import _thread
+import machine
+import ubinascii
+import network
+import urequests
+import math
+import sys
 
-NUM_LEDS = 200
-MCAST_GRP = "239.1.1.1"
+CONTROLLER_BASE_URL = "http://10.0.0.30:4545"
+DEVICE_CONFIG = {}
+DEFAULT_DEVICE_CONFIG = {
+    'real_num_leds': 200,
+    'normalized_num_leds': 200,
+    'mcast_group': "239.1.1.1",
+    "logical_device_id": -1,
+    "idle_states": [
+        {"action": "effect", "args": ["sethsv", "0", "1", ".3"]},
+        {"action": "effect", "args": ["sethsv", "120", "1", ".3"]},
+        {"action": "effect", "args": ["sethsv", "240", "1", ".3"]},
+        {"action": "effect", "args": ["sethsv", "58", "1", ".3"]},
+    ]
+}
+
+MAX_TOTAL_P = 45000
 MCAST_PORT = 4545
 led_run = True
 abort_flag_lock = _thread.allocate_lock()
@@ -15,22 +36,28 @@ pending_commands = []
 run_lock = _thread.allocate_lock()
 global_dimming = 255
 
-led_values = [(0, 0, 0)] * NUM_LEDS
+led_values = []
 
-def sparkle(sm):
+def get_config(name):
+    return DEVICE_CONFIG.get(
+        name,
+        DEFAULT_DEVICE_CONFIG.get(name)
+    )
+
+def sparkle(sm, rate = 50, *args):
     MIN_VAL = 40
     MAX_VAL = 255
-    STEP = 50
+    STEP = int(rate)
     SAT = 0.5
     BASE_HUE = 0
     ACCENT_HUE = 30
     denominator = 255
-    prev_dirs = [False] * NUM_LEDS
+    prev_dirs = [False] * get_config('real_num_leds')
     base_color = HSV2RGB(BASE_HUE, SAT, 0 / denominator)
     weight = 0
     while not abort_flag:
         weight += 1
-        dirs = [random.choice([True] + ([False] * weight)) for i in range(NUM_LEDS)]
+        dirs = [random.choice([True] + ([False] * weight)) for i in range(get_config('real_num_leds'))]
         if not any(dirs):
             break
         for i, p in enumerate(prev_dirs):
@@ -41,7 +68,7 @@ def sparkle(sm):
             down_color = HSV2RGB(
                 ACCENT_HUE, SAT, (MAX_VAL - (current_bright - MIN_VAL)) / denominator
             )
-            for i in range(NUM_LEDS):
+            for i in range(get_config('real_num_leds')):
                 if dirs[i]:
                     pixels_set(i, up_color)
                 elif prev_dirs[i]:
@@ -50,23 +77,189 @@ def sparkle(sm):
                     pixels_set(i, base_color)
             pixels_show(sm)
         prev_dirs = dirs
+    pixels_fill((0,0,0))
+    pixels_show(sm)
+
+def fade(sm, *args):
+    hue = int(args[0])
+    start_val = float(args[1])
+    end_val = float(args[2])
+    iters = int(args[3])
+
+    step = (end_val-start_val)/iters
+
+    val = start_val
+    i = iters
+    while not abort_flag and (i >= 0):
+        (r,g,b) = HSV2RGB(hue, 1, val)
+        pixels_fill((r,g,b))
+        pixels_show(sm)
+        i -= 1
+        val += step
+        # Fudged value until we get about 50ms per iteration
+        time.sleep_ms(30)
+
+def chase(sm, *args):
+    HUE = 30
+    SAT = .5
+    MIN_VAL = 40
+    MAX_VAL = 255
+    STEP = 10
+    pixels_fill((0,0,0))
+    pixels_show(sm)
+    precomputed_hue = [(0,0,0)]
+    for current_bright in range(MIN_VAL, MAX_VAL, STEP):
+        precomputed_hue.append(HSV2RGB(HUE, SAT, current_bright / 255))
+    for led_i in range(get_config('real_num_leds')+len(precomputed_hue)-1):
+        if abort_flag:
+            return
+        up_color = precomputed_hue[-1]
+        pixels_set(led_i, up_color)
+        if led_i > 1:
+            trailing_hue = 2
+            for led_reverse_i in (range(led_i-1, -1, -1)):
+                try:
+                    pixels_set(led_reverse_i, precomputed_hue[-trailing_hue])
+                except IndexError:
+                    break
+                trailing_hue += 1
+        pixels_show(sm)
+
+
+def candycane_wreath(sm, *args):
+    pixels_fill((0,0,0))
+    pixels_show(sm)
+    interval = 6
+    color_selector = 0
+    hsv_choices = [(0, 1, .3), (0, 0, .3)]
+    for led_i in range(get_config('real_num_leds')):
+        if (led_i % interval) ==  0:
+            color_selector ^= 1
+        pixels_set(led_i, HSV2RGB(*hsv_choices[color_selector]))
+    pixels_show(sm)
+
+
+def candycane_sphere(sm, *args):
+    pixels_fill((0,0,0))
+    pixels_show(sm)
+    # intervals = [14, 20, 24, 25, 24, 20, 14]
+    intervals = [int(i) for i in args]
+    interval_selector = 0
+    hsv_choices = [(0, 1, .25), (0, 0, .25)]
+    led_i = 0
+    for interval_selector in range(len(intervals)):
+        for x in range(intervals[interval_selector]):
+            pixels_set(led_i, HSV2RGB(*hsv_choices[interval_selector % 2]))
+            led_i += 1
+    pixels_show(sm)
+
+
+def global_fade_out(sm, rate, *args):
+    global global_dimming
+    save_global_dimming = global_dimming
+
+    for d in range(global_dimming, 0, -int(rate)):
+        global_dimming = d
+        pixels_show(sm)
+
+    pixels_fill((0,0,0))
+    pixels_show(sm)
+    global_dimming = save_global_dimming
+
+def wreath_render_wand_point(sm, *args):
+    x = int(args[0])
+    y = int(args[1])
+    len = math.sqrt(x*x + y*y)
+    if len > 120:
+        color = HSV2RGB(0, 1, .4)
+    else:
+        color = HSV2RGB(120-len, 1, .4)
+    for led_i in range(get_config('real_num_leds')):
+        pixels_set(led_i, color)
+    pixels_show(sm)
+
+def sethsv(sm, *args):
+    h = int(args[0])
+    (s,v) = [float(i) for i in args[1:3]]
+    (r, g, b) = HSV2RGB(h, s, v)
+    pixels_fill((r,g,b))
+    pixels_show(sm)
+
+def fade_sat(sm, hsv, reverse=False):
+    if abort_flag:
+        return
+    h, s, v = hsv
+    s_step = s/20
+    if reverse:
+        s_vals = reversed([s_step*i for i in range(21)])
+    else:
+        s_vals = [s_step*i for i in range(21)]
+    shades = [HSV2RGB(h, s_val, v) for s_val in s_vals]
+    for shade in shades:
+        if abort_flag:
+            break
+        pixels_fill(shade)
+        pixels_show(sm)
+
+def christmas_color_cycle(sm, offset=0):
+    time.sleep_ms(random.randint(500,2500))
+    colors = [
+        (0, 1, .3),
+        (120, 1, .3),
+        (240, 1, .3),
+        (58, 1, .3),
+        (29, 1, .3),
+    ]
+    offset_colors = [colors[i%len(colors)] for i in range(offset, offset+len(colors))]
+    while not abort_flag:
+        for color in offset_colors:
+            if abort_flag:
+                break
+            fade_sat(sm, color, reverse=False)
+            time.sleep_ms(5000)
+            fade_sat(sm, color, reverse=True)
+
 
 ROUTINES = {
-    'sparkle': sparkle
+    'sparkle': sparkle,
+    'fade': fade,
+    'chase': chase,
+    'candycane_wreath': candycane_wreath,
+    'candycane_sphere': candycane_sphere,
+    'global_fade_out': global_fade_out,
+    'wreath_render_wand_point': wreath_render_wand_point,
+    'sethsv': sethsv,
+    'christmas_color_cycle': christmas_color_cycle
 }
 
-def pixels_show(sm):
-    leds_packed = array.array("I", [0 for _ in range(NUM_LEDS)])
+def pixels_show(sm, dim_val = None):
+    if dim_val is None:
+        set_dim_val = global_dimming
+    else:
+        set_dim_val = dim_val
+    leds_packed = array.array("I", [0 for _ in range(get_config('real_num_leds'))])
+    total_p = 0
     for i, pixel in enumerate(led_values):
-        adj_red = ((pixel[0] ** 2) * global_dimming) // 255**2
-        adj_green = ((pixel[1] ** 2) * global_dimming) // 255**2
-        adj_blue = ((pixel[2] ** 2) * global_dimming) // 255**2
+        adj_red = ((pixel[0] ** 2) * set_dim_val) // 255**2
+        adj_green = ((pixel[1] ** 2) * set_dim_val) // 255**2
+        adj_blue = ((pixel[2] ** 2) * set_dim_val) // 255**2
+        total_p += adj_red + adj_green + adj_blue
         leds_packed[i] = (adj_blue << 16) + (adj_red << 8) + adj_green
+    adj_max_total_p = (MAX_TOTAL_P * get_config('real_num_leds')) // get_config('normalized_num_leds')
+    if total_p > adj_max_total_p:
+        new_dim_val = (global_dimming*adj_max_total_p) // total_p
+        # The -1000 is a hack here because we sometimes seem to calculate
+        # brightness values so they are never less than adj_max_total_p
+        pixels_show(sm, new_dim_val-1000)
+        return
     sm.put(leds_packed, 8)
     time.sleep_us(100)
 
 
 def pixels_set(i, val):
+    # Allow overflow to make trailing effects easier
+    if i >= len(led_values):
+        return
     led_values[i] = val
 
 
@@ -165,7 +358,6 @@ def clear_abort_flag():
 def led_state_thread(sm):
     print("Starting")
     while led_run:
-        time.sleep_ms(500)
         command = pop_pending_command()
         if command is None:
             continue
@@ -173,47 +365,138 @@ def led_state_thread(sm):
         try:
             run_lock.acquire()
             action = command['action']
+            args = command.get('args', [])
             if action == 'sethsv':
-                (r, g, b) = HSV2RGB(command['h'], command['s'], command['v'])
+                h = int(args[0])
+                (s,v) = [float(i) for i in args[1:3]]
+                (r, g, b) = HSV2RGB(h, s, v)
                 pixels_fill((r,g,b))
                 pixels_show(sm)
-            elif action == 'play':
-                routine = command['func']
+            elif action == 'effect':
+                routine = args[0]
                 if routine in ROUTINES:
                     func = ROUTINES[routine]
-                    func(sm)
+                    if len(args) > 1:
+                        func(sm, *args[1:])
+                    else:
+                        func(sm)
                 else:
-                    print(f"play: unknown routine: {routine}")
+                    print(f"effect: unknown function: {routine}")
+            elif action == 'spell':
+                if args[0] == 'incendio':
+                    sparkle(sm)
             else:
                 print(f"Unknown action: {action}")
         except Exception as e:
             print(f"Bad command: {command}: {e}")
+            sys.print_exception(e)
         finally:
             run_lock.release()
 
     print("Exiting")
 
+def download_new_main(expected_sha1):
+    import urequests
+    import os
+    import hashlib
+    import binascii
+
+    MAIN_PY_URL = f"{CONTROLLER_BASE_URL}/main.py"
+    print("Attempting main.py update")
+    current_sha1 = hashlib.sha1()
+    with open("/main.py", "rb") as f:
+        current_sha1.update(f.read())
+    current_hexdigest = binascii.hexlify(current_sha1.digest()).decode()
+    if current_hexdigest == expected_sha1:
+        # Alread has this file, nothing to do.
+        print("main.py already matches hash")
+        return
+    print(f"Checking for new main.py at {MAIN_PY_URL}")
+    try:
+        r = urequests.get(MAIN_PY_URL, timeout=5.0)
+        if r.status_code != 200:
+            raise Exception(f"Bad http response: {r.status_code}")
+        main_py_source = r.text
+    except Exception as e:
+        print(f"Download Failed: {e}")
+
+    with open("/main.py.download", "w") as f:
+        f.write(main_py_source)
+
+    new_sha1 = hashlib.sha1()
+    with open("/main.py.download", "rb") as f:
+        new_sha1.update(f.read())
+    new_hexdigest = binascii.hexlify(new_sha1.digest()).decode()
+    if new_hexdigest != expected_sha1:
+        print("sha1 mismatch!")
+        return
+
+    os.unlink("/main.py")
+    os.rename("/main.py.download", "/main.py")
+    machine.reset()
+
+def fetch_device_config():
+    try:
+        wlan_sta = network.WLAN(network.STA_IF)
+        wlan_mac = wlan_sta.config('mac')
+        my_mac = ubinascii.hexlify(wlan_mac).decode()
+        print(f"my_mac: {my_mac}")
+        device_config_url = f"{CONTROLLER_BASE_URL}/device_configs/{my_mac}"
+        r = urequests.get(device_config_url)
+        global DEVICE_CONFIG
+        DEVICE_CONFIG = r.json()
+    except Exception as e:
+        print(f"Failed device config: {e}")
+
+
 def main(sm, ip):
     global led_run
     pixels_fill((0, 0, 0))
     pixels_show(sm)
+
+    fetch_device_config()
+    global led_values
+    led_values = [(0,0,0)] * get_config('real_num_leds')
+
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.setsockopt(
         socket.IPPROTO_IP,
         socket.IP_ADD_MEMBERSHIP,
-        inet_aton(MCAST_GRP) + inet_aton(ip),
+        inet_aton(get_config('mcast_group')) + inet_aton(ip),
     )
     sock.bind(("", MCAST_PORT))
+    poller = select.poll()
+    poller.register(sock, select.POLLIN)
 
     _thread.start_new_thread(led_state_thread, [sm])
+    last_msg_id = -1
+
+    idle_state = None
 
     try:
         while True:
-            data, _ = sock.recvfrom(64)
+            res = poller.poll(1000)
+            if res:
+                data, _ = sock.recvfrom(256)
+            else:
+                continue
             try:
                 command = json.loads(data.decode())
                 action = command['action']
+                msg_id = command.get('id')
+                if msg_id is not None and msg_id == last_msg_id:
+                    continue
+                last_msg_id = msg_id
+                dest = command.get('dest')
+                if type(dest) is not list:
+                    dest = [dest]
+                if dest[0] is not None and get_config('logical_device_id') not in dest:
+                    continue
+                if action != "idlestate" and idle_state is not None:
+                    idle_state = None
+                    clear_pending_commands(abort=True)
+                    global_fade_out(sm, 20)
                 if action == 'abort':
                     clear_pending_commands(abort=True)
                     if command.get('blank', False):
@@ -221,10 +504,23 @@ def main(sm, ip):
                         pixels_fill((0, 0, 0))
                         pixels_show(sm)
                         run_lock.release()
+                elif action == 'reboot':
+                    machine.reset()
+                elif action == 'update_main':
+                    new_sha1 = command['sha1']
+                    download_new_main(expected_sha1=new_sha1)
+                elif action == 'idlestate':
+                    idle_state_arg = command.get('args', [0])[0]
+                    if idle_state is None or idle_state != idle_state_arg:
+                        idle_state = idle_state_arg
+                        idle_effect = get_config('idle_states')[idle_state % len(get_config('idle_states'))]
+                        clear_pending_commands(abort=True)
+                        global_fade_out(sm, 20)
+                        push_pending_command(idle_effect)
                 else:
                     push_pending_command(command)
             except Exception as e:
-                print(f"Bad json parse: {e}")
+                print(f"Error processing command: {e}")
     finally:
         sock.close()
         led_run = False
