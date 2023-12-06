@@ -90,7 +90,7 @@ static JPEGDEC jpeg;
 #define LOSER_BIN_BINSIZE 32
 #define MIN_IMAGE_BIN_COVERAGE 5
 #define LOSER_BIN_THRESHOLD 5
-#define LOSER_BIN_LIFETIME_SECONDS 8
+#define LOSER_BIN_LIFETIME_SECONDS 2
 
 typedef enum {
     IDLE,
@@ -123,6 +123,7 @@ int frame_counter;
 filter_state_t filter_state;
 PointBin loser_bin(LOSER_BIN_BINSIZE, LOSER_BIN_THRESHOLD);
 PointBin reduce_bin(10, 0);
+wand_event_t wand_event_data;
 
 // Bound by FILTER_QUEUE_SIZE
 deque<vector<Point>> filter_queue; // Recent frames
@@ -371,6 +372,7 @@ void process_single_frame(vector<Point> frame) {
 void handle_incoming_frame(vector<Point> frame) {
     vector<Point> tmp_pts;
     int dwell_start_frame = 0;
+    static int cumulative_losers = 0;
 
     for (auto pit = frame.begin(); pit < frame.end(); pit++) {
         if (!loser_bin.contains(*pit)) {
@@ -394,6 +396,17 @@ void handle_incoming_frame(vector<Point> frame) {
     }
 
     if (idle_counter >= IDLE_FRAME_COUNT) {
+        if (filter_state != IDLE) {
+            wand_event_data.kind = WAND_EVENT_IDLE;
+            esp_event_post_to(
+                wandc_loop,
+                WANDC_EVENT_BASE,
+                WANDC_EVENT_WAND_EVENT,
+                &wand_event_data,
+                sizeof(wand_event_data),
+                portTICK_PERIOD_MS
+            );
+        }
         filter_state = IDLE;
         detect_queue.clear();
         velocity_queue.clear();
@@ -406,8 +419,32 @@ void handle_incoming_frame(vector<Point> frame) {
     if ((++frame_counter % FRAME_QUEUE_HW_MARK) == 0) {
         path_point_queue.clear();
         filter_queue.clear();
+        size_t before_bin_size = loser_bin.bin.size();
         for (auto fit = detect_queue.begin(); fit != detect_queue.end(); fit++) {
             process_single_frame(*fit);
+        }
+        size_t after_bin_size = loser_bin.bin.size();
+        if ((after_bin_size - before_bin_size) > 0) {
+            cumulative_losers += (after_bin_size - before_bin_size);
+        } else {
+            cumulative_losers = 0;
+        }
+        if (cumulative_losers > 5) {
+            loser_bin.force_add(path_point_queue.back());
+        }
+
+        if (filter_state == ACTIVE) {
+            wand_event_data.kind = WAND_EVENT_MOVEMENT;
+            wand_event_data.xy[0] = velocity_queue.back().x;
+            wand_event_data.xy[1] = velocity_queue.back().y;
+            esp_event_post_to(
+                wandc_loop,
+                WANDC_EVENT_BASE,
+                WANDC_EVENT_WAND_EVENT,
+                &wand_event_data,
+                sizeof(wand_event_data),
+                portTICK_PERIOD_MS
+            );
         }
 
         v = compute_velocity_queue_displacement();
@@ -637,7 +674,6 @@ extern "C" void camera_task(void *params) {
     std::vector<Point> centers;
     std::vector<Rect> rects;
     std::vector<Point> shrink_points;
-    wand_status_change_t wand_status_change_data;
 
     config.pin_d0 = Y2_GPIO_NUM;
     config.pin_d1 = Y3_GPIO_NUM;
@@ -651,8 +687,8 @@ extern "C" void camera_task(void *params) {
     config.pin_pclk = PCLK_GPIO_NUM;
     config.pin_vsync = VSYNC_GPIO_NUM;
     config.pin_href = HREF_GPIO_NUM;
-    config.pin_sscb_sda = SIOD_GPIO_NUM;
-    config.pin_sscb_scl = SIOC_GPIO_NUM;
+    config.pin_sccb_sda = SIOD_GPIO_NUM;
+    config.pin_sccb_scl = SIOC_GPIO_NUM;
     config.pin_pwdn = PWDN_GPIO_NUM;
     config.pin_reset = RESET_GPIO_NUM;
     config.xclk_freq_hz = 20000000;
@@ -682,7 +718,9 @@ extern "C" void camera_task(void *params) {
     // END IR LED
 
 
+    // JSON messages sent to the web ui
     status_data = (char *)heap_caps_malloc(POINT_DATA_BUFLEN, (MALLOC_CAP_8BIT|MALLOC_CAP_SPIRAM));
+    // Final drawn image shown to the model
     image = (uint8_t *)heap_caps_malloc(FINAL_IMAGE_SIZE, (MALLOC_CAP_8BIT|MALLOC_CAP_SPIRAM));
 
     while(1) {
@@ -762,31 +800,31 @@ extern "C" void camera_task(void *params) {
                 xMessageBufferSend(point_msgbuf_handle, status_data, status_len+1, 0);
             }
 
+            // This gets notified when an inference is made
             if (ulTaskNotifyTake(pdTRUE, 0)) {
+                wand_event_data.kind = WAND_EVENT_SPELL_DETECT;
+                wand_event_data.spell = labels[image_pred].c_str();
+                wand_event_data.spell_prob = image_pred_score;
+                esp_event_post_to(
+                    wandc_loop,
+                    WANDC_EVENT_BASE,
+                    WANDC_EVENT_WAND_EVENT,
+                    &wand_event_data,
+                    sizeof(wand_event_data),
+                    portTICK_PERIOD_MS
+                );
                 ESP_LOGI(TAG, "Inference result: %d -> %d (%s)", image_pred, image_pred_score, labels[image_pred].c_str());
                 if (point_msgbuf_handle) {
                     snprintf(status_data, POINT_DATA_BUFLEN, "{\"type\": \"inference\", \"prob\": %d, \"label\": \"%s\"}", image_pred_score, labels[image_pred].c_str());
                     xMessageBufferSend(point_msgbuf_handle, status_data, strlen(status_data)+1, 0);
                 }
-                memset(&wand_status_change_data, 0, sizeof(wand_status_change_data));
-                if (labels[image_pred] == "discard") {
-                    wand_status_change_data.status = WAND_STATUS_PATTERN_DISCARD;
-                } else {
-                    wand_status_change_data.status = WAND_STATUS_PATTERN_MATCH;
-                    wand_status_change_data.pattern = labels[image_pred].c_str();
-                }
-                esp_event_post_to(
-                    wandc_loop,
-                    WANDC_EVENT_BASE,
-                    WANDC_EVENT_WAND_STATUS_CHANGE,
-                    &wand_status_change_data,
-                    sizeof(wand_status_change_data),
-                    portTICK_PERIOD_MS
-                );
             }
             xSemaphoreGive(point_stream_mutex);
         }
 
+        // Detects when the wand hovers after drawing something
+        // Triggers drawing the images from the path_point_queue and showing
+        // it to the model.
         if (filter_state == COMMIT) {
             shrink_points.clear();
             memset(image, 0, FINAL_IMAGE_SIZE);
@@ -808,6 +846,15 @@ extern "C" void camera_task(void *params) {
                 }
                 xTaskNotifyGive(inference_task_handle);
             } else {
+                wand_event_data.kind = WAND_EVENT_SPELL_IGNORED;
+                esp_event_post_to(
+                    wandc_loop,
+                    WANDC_EVENT_BASE,
+                    WANDC_EVENT_WAND_EVENT,
+                    &wand_event_data,
+                    sizeof(wand_event_data),
+                    portTICK_PERIOD_MS
+                );
                 ESP_LOGI(TAG, "Drop uninteresting image!");
             }
 

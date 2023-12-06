@@ -78,6 +78,7 @@ class PointBin {
         }
         bool contains(Point);
         void add(Point);
+        void force_add(Point);
         void add(Point, Point);
         bool remove(Point);
         int prune(int);

@@ -59,6 +59,12 @@ bool PointBin::contains(Point pt) {
     return false;
 }
 
+void PointBin::force_add(Point pt) {
+    Point binned_pt = bin_point(pt);
+    bin[binned_pt] = time(NULL);
+    bin_count[binned_pt] = bin_threshold+1;
+}
+
 void PointBin::add(Point pt) {
     Point binned_pt = bin_point(pt);
     bin[binned_pt] = time(NULL);

@@ -11,20 +11,35 @@ typedef struct {
 } ir_control_t;
 
 typedef enum {
-    WAND_STATUS_PATTERN_MATCH,
-    WAND_STATUS_PATTERN_DISCARD,
-    WAND_STATUS_WAKEUP,
-    WAND_STATUS_READY
-} wand_status_t;
+    LIGHTSHOW_STATE_SLEEP_ENTER,
+    LIGHTSHOW_STATE_SLEEP,
+    LIGHTSHOW_STATE_SLEEP_EXIT,
+    LIGHTSHOW_STATE_IDLE,
+    LIGHTSHOW_STATE_IDLE_EXIT,
+    LIGHTSHOW_STATE_TRAINING_ENTER,
+    LIGHTSHOW_STATE_TRAINING,
+    LIGHTSHOW_STATE_SPELL_FULFILL,
+    LIGHTSHOW_STATE_SPELL_BLOCK,
+    LIGHTSHOW_STATE_SPELL_WAIT
+} lightshow_state_t;
+
+typedef enum {
+    WAND_EVENT_IDLE,
+    WAND_EVENT_MOVEMENT,
+    WAND_EVENT_SPELL_IGNORED,
+    WAND_EVENT_SPELL_DETECT
+} wand_event_kind_t;
 typedef struct {
-    wand_status_t status;
-    const char *pattern;
-} wand_status_change_t;
+    wand_event_kind_t kind;
+    uint16_t xy[2];
+    char const *spell;
+    uint8_t spell_prob;
+} wand_event_t;
 
 typedef enum {
     WANDC_EVENT_IP_STACK_READY,
     WANDC_EVENT_IR_ARRAY_CONFIG,
-    WANDC_EVENT_WAND_STATUS_CHANGE
+    WANDC_EVENT_WAND_EVENT
 } control_event_t;
 
 void start_control_loop(void);
