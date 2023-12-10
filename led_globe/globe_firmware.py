@@ -241,7 +241,7 @@ def fade_val(sm, hsv, reverse=False):
         pixels_fill(shade)
         pixels_show(sm)
 
-def christmas_color_cycle(sm, offset=0):
+def christmas_color_cycle(sm):
     time.sleep_ms(random.randint(500,2500))
     colors = [
         (0, 1, .3),
@@ -250,25 +250,33 @@ def christmas_color_cycle(sm, offset=0):
         (58, 1, .3),
         (29, 1, .3),
     ]
-    offset_colors = [colors[i%len(colors)] for i in range(offset, offset+len(colors))]
     while not abort_flag:
-        for color in offset_colors:
+        color = random.choice(colors)
+        if abort_flag:
+            break
+        fade_sat(sm, color, reverse=False)
+        waited = 0
+        wait_per_iter = 500
+        while waited < 5000:
             if abort_flag:
                 break
-            fade_sat(sm, color, reverse=False)
-            waited = 0
-            wait_per_iter = 500
-            while waited < 5000:
-                if abort_flag:
-                    break
-                time.sleep_ms(wait_per_iter)
-                waited += wait_per_iter
-            fade_sat(sm, color, reverse=True)
+            time.sleep_ms(wait_per_iter)
+            waited += wait_per_iter
+        fade_sat(sm, color, reverse=True)
 
-def hot_potato(sm, max_logical_id):
+def hot_potato(sm, max_logical_id, expanded_potato_colors=False):
     clear_intra_commands()
     my_id = get_config('logical_device_id')
-    potato_color = (0, 1, .3)
+    if not expanded_potato_colors:
+        potato_colors = [(0, 1, .3)]
+    else:
+        potato_colors = [
+            (0, 1, .3),
+            (120, 1, .3),
+            (240, 1, .3),
+            (58, 1, .3),
+            (29, 1, .3),
+        ]
     not_potato_color = (0, 0, .3)
     msg_id = 0
 
@@ -277,6 +285,7 @@ def hot_potato(sm, max_logical_id):
     else:
         is_head = False
     if is_head:
+        potato_color = random.choice(potato_colors)
         pixels_fill(HSV2RGB(*potato_color))
         has_potato = True
     else:
@@ -284,6 +293,7 @@ def hot_potato(sm, max_logical_id):
         has_potato = False
     pixels_show(sm)
     while not abort_flag:
+        potato_color = random.choice(potato_colors)
         if has_potato:
             if my_id == int(max_logical_id):
                 next_id = 0

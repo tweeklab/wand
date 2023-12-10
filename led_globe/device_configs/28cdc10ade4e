@@ -6,7 +6,8 @@
   "logical_device_id": 7,
   "idle_states": [
     {"action": "effect", "args": ["hot_potato", "7"]},
-    {"action": "effect", "args": ["christmas_color_cycle", 4]},
+    {"action": "effect", "args": ["christmas_color_cycle"]},
+    {"action": "effect", "args": ["hot_potato", "7", true]},
     {"action": "effect", "args": ["candycane_sphere"]}
   ]
 }
