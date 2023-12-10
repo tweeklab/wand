@@ -16,7 +16,7 @@ DEVICE_CONFIG = {}
 DEFAULT_DEVICE_CONFIG = {
     'real_num_leds': 200,
     'normalized_num_leds': 200,
-    'mcast_group': "239.1.1.1",
+    'mcast_group': "239.1.2.2",
     "logical_device_id": -1,
     "idle_states": [
         {"action": "effect", "args": ["sethsv", "0", "1", ".3"]},
@@ -28,13 +28,19 @@ DEFAULT_DEVICE_CONFIG = {
 
 MAX_TOTAL_P = 45000
 MCAST_PORT = 4545
+INTRA_MCAST_PORT = 4546
 led_run = True
 abort_flag_lock = _thread.allocate_lock()
 abort_flag = False
 pending_command_lock = _thread.allocate_lock()
 pending_commands = []
+intra_command_lock = _thread.allocate_lock()
+intra_commands = []
+out_command_lock = _thread.allocate_lock()
+out_commands = []
 run_lock = _thread.allocate_lock()
 global_dimming = 255
+idle_state = None
 
 led_values = []
 
@@ -82,16 +88,17 @@ def sparkle(sm, rate = 50, *args):
 
 def fade(sm, *args):
     hue = int(args[0])
-    start_val = float(args[1])
-    end_val = float(args[2])
-    iters = int(args[3])
+    sat = float(args[1])
+    start_val = float(args[2])
+    end_val = float(args[3])
+    iters = int(args[4])
 
     step = (end_val-start_val)/iters
 
     val = start_val
     i = iters
     while not abort_flag and (i >= 0):
-        (r,g,b) = HSV2RGB(hue, 1, val)
+        (r,g,b) = HSV2RGB(hue, sat, val)
         pixels_fill((r,g,b))
         pixels_show(sm)
         i -= 1
@@ -139,20 +146,35 @@ def candycane_wreath(sm, *args):
     pixels_show(sm)
 
 
+# def candycane_sphere(sm, *args):
+#     pixels_fill((0,0,0))
+#     pixels_show(sm)
+#     s_step = 1/20
+#     s_vals = [s_step*i for i in range(21)]
+#     rgb_vals = [HSV2RGB(0, s, .3) for s in s_vals]
+#     while not abort_flag:
+#         for offset in range(len(rgb_vals)):
+#             if abort_flag:
+#                 break
+#             for led_i in range(get_config('real_num_leds')):
+#                 pixels_set(led_i, rgb_vals[(led_i+offset)%len(rgb_vals)])
+#             pixels_show(sm)
+#             time.sleep_ms(100)
+
 def candycane_sphere(sm, *args):
     pixels_fill((0,0,0))
     pixels_show(sm)
-    # intervals = [14, 20, 24, 25, 24, 20, 14]
-    intervals = [int(i) for i in args]
-    interval_selector = 0
-    hsv_choices = [(0, 1, .25), (0, 0, .25)]
-    led_i = 0
-    for interval_selector in range(len(intervals)):
-        for x in range(intervals[interval_selector]):
-            pixels_set(led_i, HSV2RGB(*hsv_choices[interval_selector % 2]))
-            led_i += 1
-    pixels_show(sm)
-
+    s_step = 1/2
+    s_vals = [s_step*i for i in range(3)]
+    rgb_vals = [HSV2RGB(0, s, .3) for s in s_vals] + [HSV2RGB(0, s, .3) for s in reversed(s_vals)] + ([HSV2RGB(0, s_vals[0], .3)] * 3)
+    while not abort_flag:
+        for offset in range(len(rgb_vals)):
+            if abort_flag:
+                break
+            for led_i in range(get_config('real_num_leds')):
+                pixels_set(led_i, rgb_vals[(led_i+offset)%len(rgb_vals)])
+            pixels_show(sm)
+            time.sleep_ms(100)
 
 def global_fade_out(sm, rate, *args):
     global global_dimming
@@ -216,9 +238,58 @@ def christmas_color_cycle(sm, offset=0):
             if abort_flag:
                 break
             fade_sat(sm, color, reverse=False)
-            time.sleep_ms(5000)
+            waited = 0
+            wait_per_iter = 500
+            while waited < 5000:
+                if abort_flag:
+                    break
+                time.sleep_ms(wait_per_iter)
+                waited += wait_per_iter
             fade_sat(sm, color, reverse=True)
 
+def hot_potato(sm, max_logical_id):
+    clear_intra_commands()
+    my_id = get_config('logical_device_id')
+    potato_color = (0, 1, .3)
+    not_potato_color = (0, 0, .3)
+    msg_id = 0
+
+    if my_id == 0:
+        is_head = True
+    else:
+        is_head = False
+    if is_head:
+        pixels_fill(HSV2RGB(*potato_color))
+        has_potato = True
+    else:
+        pixels_fill(HSV2RGB(*not_potato_color))
+        has_potato = False
+    pixels_show(sm)
+    while not abort_flag:
+        if has_potato:
+            if my_id == int(max_logical_id):
+                next_id = 0
+            else:
+                next_id = my_id + 1
+            msg_id = time.time_ns()
+            msg_data = {
+                'baton': 'hot_potato',
+                'id': msg_id,
+                'dest': [next_id]
+            }
+            push_out_command(msg_data)
+            has_potato = False
+            fade_sat(sm, potato_color, reverse=True)
+
+        cmd = pop_intra_command()
+        if not cmd:
+            if (time.time_ns() - msg_id) > 8000000000 and is_head:
+                has_potato=True
+            continue
+        if cmd.get('baton') != 'hot_potato':
+            print("unknown baton.  dropping!")
+        has_potato = True
+        fade_sat(sm, potato_color, reverse=False)
 
 ROUTINES = {
     'sparkle': sparkle,
@@ -229,7 +300,8 @@ ROUTINES = {
     'global_fade_out': global_fade_out,
     'wreath_render_wand_point': wreath_render_wand_point,
     'sethsv': sethsv,
-    'christmas_color_cycle': christmas_color_cycle
+    'christmas_color_cycle': christmas_color_cycle,
+    'hot_potato': hot_potato
 }
 
 def pixels_show(sm, dim_val = None):
@@ -330,12 +402,6 @@ def pop_pending_command():
     pending_command_lock.release()
     return ps
 
-def peek_pending_command():
-    pending_command_lock.acquire()
-    ps = pending_commands[-1]
-    pending_command_lock.release()
-    return ps
-
 def clear_pending_commands(abort = False):
     pending_command_lock.acquire()
     pending_commands.clear()
@@ -355,6 +421,41 @@ def clear_abort_flag():
     abort_flag = False
     abort_flag_lock.release()
 
+def push_intra_command(command):
+    intra_command_lock.acquire()
+    intra_commands.insert(0, command)
+    intra_command_lock.release()
+
+def pop_intra_command():
+    intra_command_lock.acquire()
+    if len(intra_commands) == 0:
+        ps = None
+    else:
+        ps = intra_commands.pop()
+    intra_command_lock.release()
+    return ps
+
+def clear_intra_commands(abort = False):
+    intra_command_lock.acquire()
+    intra_commands.clear()
+    if abort:
+        abort_current_command()
+    intra_command_lock.release()
+
+def push_out_command(command):
+    out_command_lock.acquire()
+    out_commands.insert(0, command)
+    out_command_lock.release()
+
+def pop_out_command():
+    out_command_lock.acquire()
+    if len(out_commands) == 0:
+        ps = None
+    else:
+        ps = out_commands.pop()
+    out_command_lock.release()
+    return ps
+
 def led_state_thread(sm):
     print("Starting")
     while led_run:
@@ -366,13 +467,7 @@ def led_state_thread(sm):
             run_lock.acquire()
             action = command['action']
             args = command.get('args', [])
-            if action == 'sethsv':
-                h = int(args[0])
-                (s,v) = [float(i) for i in args[1:3]]
-                (r, g, b) = HSV2RGB(h, s, v)
-                pixels_fill((r,g,b))
-                pixels_show(sm)
-            elif action == 'effect':
+            if action == 'effect':
                 routine = args[0]
                 if routine in ROUTINES:
                     func = ROUTINES[routine]
@@ -385,6 +480,8 @@ def led_state_thread(sm):
             elif action == 'spell':
                 if args[0] == 'incendio':
                     sparkle(sm)
+            elif action == 'training_enter':
+                fade(sm, 50, .4, 0, .2, 10)
             else:
                 print(f"Unknown action: {action}")
         except Exception as e:
@@ -419,6 +516,7 @@ def download_new_main(expected_sha1):
         main_py_source = r.text
     except Exception as e:
         print(f"Download Failed: {e}")
+        return
 
     with open("/main.py.download", "w") as f:
         f.write(main_py_source)
@@ -442,11 +540,66 @@ def fetch_device_config():
         my_mac = ubinascii.hexlify(wlan_mac).decode()
         print(f"my_mac: {my_mac}")
         device_config_url = f"{CONTROLLER_BASE_URL}/device_configs/{my_mac}"
-        r = urequests.get(device_config_url)
-        global DEVICE_CONFIG
-        DEVICE_CONFIG = r.json()
     except Exception as e:
-        print(f"Failed device config: {e}")
+        print(f"Failed discovering MAC address: {e}")
+
+    try:
+        r = urequests.get(device_config_url, timeout=5.0)
+        if r.status_code != 200:
+            raise Exception(f"Bad http response: {r.status_code}")
+        config_text = r.text
+        print("Device config download OK.  Saving file.")
+        with open("/device_config.json", "w") as f:
+            f.write(config_text)
+    except Exception as e:
+        print(f"Config fetch Failed: {e}")
+
+    try:
+        print("Trying to load saved config")
+        with open("/device_config.json") as f:
+            config_data = json.load(f)
+
+        global DEVICE_CONFIG
+        DEVICE_CONFIG = config_data
+    except Exception as e:
+        print(f"Loading saved config failed.  Using defaults! {e}")
+
+
+def handle_cmd(sm, command):
+    global idle_state
+    global last_msg_id
+    try:
+        action = command['action']
+        if action != "idlestate" and idle_state is not None:
+            idle_state = None
+            print("end idlestate")
+            clear_pending_commands(abort=True)
+            global_fade_out(sm, 20)
+            print("idlestate ended")
+        if action == 'abort':
+            clear_pending_commands(abort=True)
+            if command.get('blank', False):
+                run_lock.acquire()
+                pixels_fill((0, 0, 0))
+                pixels_show(sm)
+                run_lock.release()
+        elif action == 'reboot':
+            machine.reset()
+        elif action == 'update_main':
+            new_sha1 = command['sha1']
+            download_new_main(expected_sha1=new_sha1)
+        elif action == 'idlestate':
+            idle_state_arg = command.get('args', [0])[0]
+            if idle_state is None or idle_state != idle_state_arg:
+                idle_state = idle_state_arg
+                idle_effect = get_config('idle_states')[idle_state % len(get_config('idle_states'))]
+                clear_pending_commands(abort=True)
+                global_fade_out(sm, 20)
+                push_pending_command(idle_effect)
+        else:
+            push_pending_command(command)
+    except Exception as e:
+        print(f"Error processing command: {e}")
 
 
 def main(sm, ip):
@@ -458,71 +611,70 @@ def main(sm, ip):
     global led_values
     led_values = [(0,0,0)] * get_config('real_num_leds')
 
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.setsockopt(
+    cmd_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    cmd_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    cmd_sock.setsockopt(
         socket.IPPROTO_IP,
         socket.IP_ADD_MEMBERSHIP,
         inet_aton(get_config('mcast_group')) + inet_aton(ip),
     )
-    sock.bind(("", MCAST_PORT))
+    cmd_sock.bind(("", MCAST_PORT))
+
+    intra_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    intra_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    intra_sock.setsockopt(
+        socket.IPPROTO_IP,
+        socket.IP_ADD_MEMBERSHIP,
+        inet_aton(get_config('mcast_group')) + inet_aton(ip),
+    )
+    intra_sock.bind(("", INTRA_MCAST_PORT))
+    print(id(cmd_sock))
+    print(id(intra_sock))
+
     poller = select.poll()
-    poller.register(sock, select.POLLIN)
+    poller.register(cmd_sock, select.POLLIN)
+    poller.register(intra_sock, select.POLLIN)
 
     _thread.start_new_thread(led_state_thread, [sm])
-    last_msg_id = -1
 
-    idle_state = None
+    last_msg_id = {
+        cmd_sock: -1,
+        intra_sock: -1
+    }
 
     try:
         while True:
-            res = poller.poll(1000)
+            res = poller.poll(50)
+            print(res)
             if res:
-                data, _ = sock.recvfrom(256)
+                for s in res:
+                    data, _ = s[0].recvfrom(256)
+                    command = json.loads(data.decode())
+                    msg_id = command.get('id')
+                    dest = command.get('dest')
+                    if type(dest) is not list:
+                        dest = [dest]
+                    if dest[0] is not None and get_config('logical_device_id') not in dest:
+                        continue
+                    if msg_id is not None and msg_id == last_msg_id[s[0]]:
+                        continue
+                    last_msg_id[s[0]] = msg_id
+                    if s[0] is intra_sock:
+                        push_intra_command(command)
+                    else:
+                        handle_cmd(sm, command)
             else:
-                continue
-            try:
-                command = json.loads(data.decode())
-                action = command['action']
-                msg_id = command.get('id')
-                if msg_id is not None and msg_id == last_msg_id:
-                    continue
-                last_msg_id = msg_id
-                dest = command.get('dest')
-                if type(dest) is not list:
-                    dest = [dest]
-                if dest[0] is not None and get_config('logical_device_id') not in dest:
-                    continue
-                if action != "idlestate" and idle_state is not None:
-                    idle_state = None
-                    clear_pending_commands(abort=True)
-                    global_fade_out(sm, 20)
-                if action == 'abort':
-                    clear_pending_commands(abort=True)
-                    if command.get('blank', False):
-                        run_lock.acquire()
-                        pixels_fill((0, 0, 0))
-                        pixels_show(sm)
-                        run_lock.release()
-                elif action == 'reboot':
-                    machine.reset()
-                elif action == 'update_main':
-                    new_sha1 = command['sha1']
-                    download_new_main(expected_sha1=new_sha1)
-                elif action == 'idlestate':
-                    idle_state_arg = command.get('args', [0])[0]
-                    if idle_state is None or idle_state != idle_state_arg:
-                        idle_state = idle_state_arg
-                        idle_effect = get_config('idle_states')[idle_state % len(get_config('idle_states'))]
-                        clear_pending_commands(abort=True)
-                        global_fade_out(sm, 20)
-                        push_pending_command(idle_effect)
-                else:
-                    push_pending_command(command)
-            except Exception as e:
-                print(f"Error processing command: {e}")
+                out_cmd = pop_out_command()
+                out_cmd_json = json.dumps(out_cmd)
+                if out_cmd:
+                    intra_sock.sendto(out_cmd_json, (get_config('mcast_group'), INTRA_MCAST_PORT))
+                    time.sleep_ms(100)
+                    intra_sock.sendto(out_cmd_json, (get_config('mcast_group'), INTRA_MCAST_PORT))
+                    time.sleep_ms(100)
+                    intra_sock.sendto(out_cmd_json, (get_config('mcast_group'), INTRA_MCAST_PORT))
     finally:
-        sock.close()
+        cmd_sock.close()
+        intra_sock.close()
         led_run = False
 
 

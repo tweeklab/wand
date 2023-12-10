@@ -1,10 +1,12 @@
 {
-  "description": "",
+  "description": "Ball 1",
   "real_num_leds": 100,
   "normalized_num_leds": 200,
   "mcast_group": "239.1.1.1",
   "logical_device_id": 1,
   "idle_states": [
-    {"action": "effect", "args": ["christmas_color_cycle", 6]}
+    {"action": "effect", "args": ["hot_potato", "7"]},
+    {"action": "effect", "args": ["christmas_color_cycle", 6]},
+    {"action": "effect", "args": ["candycane_sphere"]}
   ]
 }

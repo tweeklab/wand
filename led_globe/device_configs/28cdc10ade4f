@@ -1,0 +1,12 @@
+{
+  "description": "Test Board",
+  "real_num_leds": 200,
+  "normalized_num_leds": 200,
+  "mcast_group": "239.1.2.1",
+  "logical_device_id": 0,
+  "idle_states": [
+    {"action": "effect", "args": ["hot_potato", "7"]},
+    {"action": "effect", "args": ["christmas_color_cycle", 0]},
+    {"action": "effect", "args": ["christmas_color_cycle", 0]}
+  ]
+}
