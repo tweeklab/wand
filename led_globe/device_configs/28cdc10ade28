@@ -7,6 +7,6 @@
   "idle_states": [
     {"action": "effect", "args": ["hot_potato", "7"]},
     {"action": "effect", "args": ["christmas_color_cycle", 2]},
-    {"action": "effect", "args": ["christmas_color_cycle", 2]}
+    {"action": "effect", "args": ["candycane_sphere"]}
   ]
 }

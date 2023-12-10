@@ -208,15 +208,33 @@ def sethsv(sm, *args):
     pixels_show(sm)
 
 def fade_sat(sm, hsv, reverse=False):
+    step_count = int((20 * (get_config('normalized_num_leds')/get_config('real_num_leds'))))
     if abort_flag:
         return
     h, s, v = hsv
-    s_step = s/20
+    s_step = s/step_count
     if reverse:
-        s_vals = reversed([s_step*i for i in range(21)])
+        s_vals = reversed([s_step*i for i in range(step_count+1)])
     else:
-        s_vals = [s_step*i for i in range(21)]
+        s_vals = [s_step*i for i in range(step_count+1)]
     shades = [HSV2RGB(h, s_val, v) for s_val in s_vals]
+    for shade in shades:
+        if abort_flag:
+            break
+        pixels_fill(shade)
+        pixels_show(sm)
+
+def fade_val(sm, hsv, reverse=False):
+    step_count = int((20 * (get_config('normalized_num_leds')/get_config('real_num_leds'))))
+    if abort_flag:
+        return
+    h, s, v = hsv
+    v_step = v/step_count
+    if reverse:
+        v_vals = reversed([v_step*i for i in range(step_count+1)])
+    else:
+        v_vals = [v_step*i for i in range(step_count+1)]
+    shades = [HSV2RGB(h, s, v_val) for v_val in v_vals]
     for shade in shades:
         if abort_flag:
             break
@@ -290,6 +308,56 @@ def hot_potato(sm, max_logical_id):
             print("unknown baton.  dropping!")
         has_potato = True
         fade_sat(sm, potato_color, reverse=False)
+
+def naughty_or_nice(sm):
+    clear_intra_commands()
+    my_id = get_config('logical_device_id')
+    naughty_color = (0, 1, .3)
+    nice_color = (120, 1, .3)
+    thinking_color = (50, 1, .3)
+    msg_id = 0
+
+    if my_id == 0:
+        is_head = True
+    else:
+        is_head = False
+
+    reverse = False
+    for _ in range(6):
+        if abort_flag:
+            return
+        fade_val(sm, thinking_color, reverse=reverse)
+        reverse = not reverse
+
+    if is_head:
+        is_naughty = random.choice([True] + [False] * 2)
+        msg_id = time.time_ns()
+        msg_data = {
+            'baton': 'naughty_or_nice',
+            'is_naughty': is_naughty,
+            'id': msg_id
+        }
+        push_out_command(msg_data)
+
+        if is_naughty:
+            fade_val(sm, naughty_color, reverse=False)
+        else:
+            fade_val(sm, nice_color, reverse=False)
+    else:
+        while not abort_flag:
+            cmd = pop_intra_command()
+            if not cmd:
+                continue
+            if cmd.get('baton') != 'naughty_or_nice':
+                print("unknown baton.  dropping!")
+            else:
+                is_naughty = cmd.get('is_naughty')
+                if is_naughty:
+                    fade_val(sm, naughty_color, reverse=False)
+                    break
+                else:
+                    fade_val(sm, nice_color, reverse=False)
+                    break
 
 ROUTINES = {
     'sparkle': sparkle,
@@ -479,7 +547,11 @@ def led_state_thread(sm):
                     print(f"effect: unknown function: {routine}")
             elif action == 'spell':
                 if args[0] == 'incendio':
-                    sparkle(sm)
+                    sparkle(sm, 200)
+                if args[0] == 'mimblewimble':
+                    naughty_or_nice(sm)
+                if args[0] == 'gonadium':
+                    fade_sat(sm, (240, 1.0, .4), reverse=False)
             elif action == 'training_enter':
                 fade(sm, 50, .4, 0, .2, 10)
             else:
@@ -628,8 +700,6 @@ def main(sm, ip):
         inet_aton(get_config('mcast_group')) + inet_aton(ip),
     )
     intra_sock.bind(("", INTRA_MCAST_PORT))
-    print(id(cmd_sock))
-    print(id(intra_sock))
 
     poller = select.poll()
     poller.register(cmd_sock, select.POLLIN)
@@ -645,7 +715,6 @@ def main(sm, ip):
     try:
         while True:
             res = poller.poll(50)
-            print(res)
             if res:
                 for s in res:
                     data, _ = s[0].recvfrom(256)
@@ -660,6 +729,7 @@ def main(sm, ip):
                         continue
                     last_msg_id[s[0]] = msg_id
                     if s[0] is intra_sock:
+                        print(command)
                         push_intra_command(command)
                     else:
                         handle_cmd(sm, command)
@@ -667,6 +737,7 @@ def main(sm, ip):
                 out_cmd = pop_out_command()
                 out_cmd_json = json.dumps(out_cmd)
                 if out_cmd:
+                    print(out_cmd)
                     intra_sock.sendto(out_cmd_json, (get_config('mcast_group'), INTRA_MCAST_PORT))
                     time.sleep_ms(100)
                     intra_sock.sendto(out_cmd_json, (get_config('mcast_group'), INTRA_MCAST_PORT))
