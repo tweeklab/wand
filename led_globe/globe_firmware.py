@@ -277,7 +277,6 @@ def hot_potato(sm, max_logical_id, expanded_potato_colors=False):
             (58, 1, .3),
             (29, 1, .3),
         ]
-    not_potato_color = (0, 0, .3)
     msg_id = 0
 
     if my_id == 0:
@@ -285,15 +284,14 @@ def hot_potato(sm, max_logical_id, expanded_potato_colors=False):
     else:
         is_head = False
     if is_head:
-        potato_color = random.choice(potato_colors)
-        pixels_fill(HSV2RGB(*potato_color))
         has_potato = True
     else:
-        pixels_fill(HSV2RGB(*not_potato_color))
+        pixels_fill(HSV2RGB(0, 0, .3))
+        pixels_show(sm)
         has_potato = False
-    pixels_show(sm)
+
+    potato_color = random.choice(potato_colors)
     while not abort_flag:
-        potato_color = random.choice(potato_colors)
         if has_potato:
             if my_id == int(max_logical_id):
                 next_id = 0
@@ -308,6 +306,7 @@ def hot_potato(sm, max_logical_id, expanded_potato_colors=False):
             push_out_command(msg_data)
             has_potato = False
             fade_sat(sm, potato_color, reverse=True)
+            potato_color = random.choice(potato_colors)
 
         cmd = pop_intra_command()
         if not cmd:
@@ -739,7 +738,6 @@ def main(sm, ip):
                         continue
                     last_msg_id[s[0]] = msg_id
                     if s[0] is intra_sock:
-                        print(command)
                         push_intra_command(command)
                     else:
                         handle_cmd(sm, command)
@@ -747,7 +745,6 @@ def main(sm, ip):
                 out_cmd = pop_out_command()
                 out_cmd_json = json.dumps(out_cmd)
                 if out_cmd:
-                    print(out_cmd)
                     intra_sock.sendto(out_cmd_json, (get_config('mcast_group'), INTRA_MCAST_PORT))
                     time.sleep_ms(100)
                     intra_sock.sendto(out_cmd_json, (get_config('mcast_group'), INTRA_MCAST_PORT))
