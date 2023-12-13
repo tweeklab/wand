@@ -113,6 +113,11 @@ static void display_global_fade(int addr_mask, char *cmd_buf) {
     send_multicast(addr_mask, cmd_buf, true);
 }
 
+static void display_training_enter(int addr_mask, char *cmd_buf) {
+    snprintf(cmd_buf, CMD_BUF_BYTES, "{\"action\": \"training_enter\", \"id\": %llu}", get_time_us());
+    send_multicast(addr_mask, cmd_buf, true);
+}
+
 static void display_spell(int addr_mask, char *cmd_buf, const char *spell_name) {
     snprintf(cmd_buf, CMD_BUF_BYTES, "{\"action\": \"spell\", \"args\": [\"%s\"], \"id\": %llu}", spell_name, get_time_us());
     send_multicast(addr_mask, cmd_buf, true);
@@ -159,7 +164,7 @@ static void start_time_sync() {
 }
 
 static void idle_lightshow() {
-    int current_idle_state;
+    static int current_idle_state = 0;
     int current_idle_state_time_counter;
     char *cmd_buf = (char *) heap_caps_malloc(
         CMD_BUF_BYTES,
@@ -288,8 +293,8 @@ static void heartbeat() {
         int linear_time = (now_tm.tm_hour*60) + now_tm.tm_min;
 
         if (
-            ((linear_time >= (16*60)+0)) &&
-            ((linear_time < (23*60)+03))
+            ((linear_time >= (17*60)+30)) &&
+            ((linear_time < (23*60)+0))
         ) {
             if (lightshow_state == LIGHTSHOW_STATE_SLEEP) {
                 lightshow_state = LIGHTSHOW_STATE_SLEEP_EXIT;
@@ -334,7 +339,7 @@ static void heartbeat() {
         } else if (lightshow_state == LIGHTSHOW_STATE_TRAINING_ENTER) {
             ESP_LOGI(TAG, "Training session begins");
             lightshow_state = LIGHTSHOW_STATE_TRAINING;
-            display_global_fade(GLOBE_MCAST_MASK, cmd_buf);
+            display_training_enter(GLOBE_MCAST_MASK, cmd_buf);
         }  else if (lightshow_state == LIGHTSHOW_STATE_SPELL_BLOCK) {
             if ((now - spell_block_start_time) > 5000000) {
                 lightshow_state = LIGHTSHOW_STATE_SPELL_WAIT;
