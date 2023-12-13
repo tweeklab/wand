@@ -189,13 +189,24 @@ def global_fade_out(sm, rate, *args):
     global_dimming = save_global_dimming
 
 def wreath_render_wand_point(sm, *args):
+    captured = False
+    match = False
     x = int(args[0])
     y = int(args[1])
-    len = math.sqrt(x*x + y*y)
-    if len > 120:
-        color = HSV2RGB(0, 1, .4)
-    else:
-        color = HSV2RGB(120-len, 1, .4)
+    len = int(math.sqrt(x*x + y*y))
+    if len < 50:
+        captured = True
+        match = True
+    elif len > 75:
+            captured = False
+            match = True
+
+    if match:
+        if captured:
+            color = HSV2RGB(120, 1, .4)
+        else:
+            color = HSV2RGB(0, 1, .4)
+
     for led_i in range(get_config('real_num_leds')):
         pixels_set(led_i, color)
     pixels_show(sm)
