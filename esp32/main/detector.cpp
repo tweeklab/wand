@@ -117,6 +117,20 @@ vector<string> labels = {
   "discard"
 };
 
+// Labels we send to the control loop for lighting
+// control
+vector<string> action_labels = {
+  "discard",
+  "discard",
+  "incendio",
+  "mimblewimble",
+  "discard",
+  "discard",
+  "gonadium",
+  "discard",
+  "discard"
+};
+
 deque<vector<Point>> detect_queue;
 int idle_counter;
 int frame_counter;
@@ -433,7 +447,7 @@ void handle_incoming_frame(vector<Point> frame) {
             loser_bin.force_add(path_point_queue.back());
         }
 
-        if (filter_state == ACTIVE) {
+        if (filter_state == ACTIVE || filter_state == DWELL) {
             wand_event_data.kind = WAND_EVENT_MOVEMENT;
             wand_event_data.xy[0] = velocity_queue.back().x;
             wand_event_data.xy[1] = velocity_queue.back().y;
@@ -803,7 +817,7 @@ extern "C" void camera_task(void *params) {
             // This gets notified when an inference is made
             if (ulTaskNotifyTake(pdTRUE, 0)) {
                 wand_event_data.kind = WAND_EVENT_SPELL_DETECT;
-                wand_event_data.spell = labels[image_pred].c_str();
+                wand_event_data.spell = action_labels[image_pred].c_str();
                 wand_event_data.spell_prob = image_pred_score;
                 esp_event_post_to(
                     wandc_loop,
