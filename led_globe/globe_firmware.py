@@ -63,7 +63,7 @@ def sparkle(sm, rate = 50, *args):
     weight = 0
     while not abort_flag:
         weight += 1
-        dirs = [random.choice([True] + ([False] * weight)) for i in range(get_config('real_num_leds'))]
+        dirs = [random.choice([True, True] + ([False] * weight)) for i in range(get_config('real_num_leds'))]
         if not any(dirs):
             break
         for i, p in enumerate(prev_dirs):
@@ -189,23 +189,12 @@ def global_fade_out(sm, rate, *args):
     global_dimming = save_global_dimming
 
 def wreath_render_wand_point(sm, *args):
-    captured = False
-    match = False
     x = int(args[0])
     y = int(args[1])
-    len = int(math.sqrt(x*x + y*y))
-    if len < 50:
-        captured = True
-        match = True
-    elif len > 75:
-            captured = False
-            match = True
-
-    if match:
-        if captured:
-            color = HSV2RGB(120, 1, .4)
-        else:
-            color = HSV2RGB(0, 1, .4)
+    if (y < 150):
+        color = HSV2RGB(120, 1, .4)
+    else:
+        color = HSV2RGB(0, 1, .4)
 
     for led_i in range(get_config('real_num_leds')):
         pixels_set(led_i, color)
@@ -343,6 +332,7 @@ def naughty_or_nice(sm):
         is_head = False
 
     reverse = False
+    time.sleep_ms(random.randint(200,700))
     for _ in range(6):
         if abort_flag:
             return
@@ -350,7 +340,7 @@ def naughty_or_nice(sm):
         reverse = not reverse
 
     if is_head:
-        is_naughty = random.choice([True] + [False] * 2)
+        is_naughty = random.choice([True] + [False] * 4)
         msg_id = time.time_ns()
         msg_data = {
             'baton': 'naughty_or_nice',
@@ -567,9 +557,15 @@ def led_state_thread(sm):
                     print(f"effect: unknown function: {routine}")
             elif action == 'spell':
                 if args[0] == 'incendio':
-                    sparkle(sm, 200)
+                    if get_config("description") == "wreath":
+                        sethsv(sm, 0, 0, .2)
+                    else:
+                        sparkle(sm, 200)
                 if args[0] == 'mimblewimble':
-                    naughty_or_nice(sm)
+                    if get_config("description") == "wreath":
+                        sethsv(sm, 0, 0, .2)
+                    else:
+                        naughty_or_nice(sm)
                 if args[0] == 'gonadium':
                     fade_sat(sm, (240, 1.0, .4), reverse=False)
             elif action == 'training_enter':
