@@ -20,6 +20,8 @@ class Rect {
             br(br) {};
 
         bool intersect(Rect const& other, Rect& merged);
+        bool contains(Point pt);
+        bool contains(int x, int y);
         bool empty();
         Point center();
 };

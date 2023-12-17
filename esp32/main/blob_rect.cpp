@@ -34,6 +34,20 @@ bool Rect::intersect(Rect const& other, Rect& merged) {
     return true;
 }
 
+bool Rect::contains(int x, int y) {
+    if ((x < tl.x) || (x > br.x)) {
+        return false;
+    }
+    if ((y < tl.y) || (y > br.y)) {
+        return false;
+    }
+    return true;
+}
+
+bool Rect::contains(Point pt) {
+    return contains(pt.x, pt.y);
+}
+
 bool Rect::empty() {
     if ((br.x-tl.x == 0) || (br.y-tl.y == 0)) {
         return true;

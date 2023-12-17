@@ -15,7 +15,7 @@
 #include <time.h>
 
 #define NUM_IDLE_STATES 4
-#define TIME_PER_IDLE_STATE_SECONDS 120
+#define TIME_PER_IDLE_STATE_SECONDS 30
 #define CMD_BUF_BYTES 256
 
 #define GLOBE_MCAST_ADDR 0
@@ -39,6 +39,7 @@ static SemaphoreHandle_t mcast_socket_mutex = NULL;
 static unsigned int wand_active_counter = 0;
 static int64_t last_active_timestamp = 0;
 static char full_notify_url[200];
+static bool user_on_switch = false;
 
 ESP_EVENT_DEFINE_BASE(WANDC_EVENT_BASE);
 esp_event_loop_handle_t wandc_loop;
@@ -129,7 +130,10 @@ static void display_idle_state(int addr_mask, char *cmd_buf, const int idle_stat
     send_multicast(addr_mask, cmd_buf, true);
 }
 
-static void set_wand_decorations_active(bool on) {
+static esp_err_t set_wand_decorations_active(bool on) {
+    // Caller here should avoid transitioning state
+    // until this succeeds
+    esp_err_t ret = ESP_OK;
     esp_http_client_config_t config = {
         .method = HTTP_METHOD_GET,
         .cert_pem = ifttt_tls_root_pem_start
@@ -140,11 +144,15 @@ static void set_wand_decorations_active(bool on) {
         config.url = "https://maker.ifttt.com/trigger/wand_inactive/with/key/VmD35TgKrycWxnjSSFJ2M";
     }
     esp_http_client_handle_t client = esp_http_client_init(&config);
-    esp_http_client_perform(client);
+    ret = esp_http_client_perform(client);
     esp_http_client_cleanup(client);
+
+    return ret;
 }
 
 static void notify_wand_activity(char *event) {
+    // I don't care if this works or not, best effort
+    // so I'm throwing away the return code here.
     esp_http_client_config_t config = {
         .method = HTTP_METHOD_GET,
         .cert_pem = ifttt_tls_root_pem_start,
@@ -195,7 +203,6 @@ static void idle_lightshow() {
         goto out_semerror;
     }
     ESP_LOGI(TAG, "idle lightshow starting");
-    current_idle_state = 0;
     current_idle_state_time_counter = 0;
     while (lightshow_state == LIGHTSHOW_STATE_IDLE) {
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1000));
@@ -244,7 +251,7 @@ static void handle_wand_event(void* handler_arg, esp_event_base_t base, int32_t 
     if (event_data->kind == WAND_EVENT_MOVEMENT) {
         ++wand_active_counter;
         last_active_timestamp = get_time_us();
-        if ((lightshow_state == LIGHTSHOW_STATE_IDLE) && (wand_active_counter > 20)) {
+        if ((lightshow_state == LIGHTSHOW_STATE_IDLE) && (wand_active_counter > 25)) {
             lightshow_state = LIGHTSHOW_STATE_IDLE_EXIT;
             lightshow_exit_state = LIGHTSHOW_STATE_TRAINING_ENTER;
             xTaskNotifyGive(heartbeat_task_handle);
@@ -292,6 +299,7 @@ static void heartbeat() {
     int64_t now = 0;
     time_t now_time_t = 0;
     int64_t spell_block_start_time = 0;
+    bool timeclock_on = false;
     lightshow_state = LIGHTSHOW_STATE_SLEEP_ENTER;
     char *cmd_buf = (char *) heap_caps_malloc(
         CMD_BUF_BYTES,
@@ -310,6 +318,20 @@ static void heartbeat() {
             ((linear_time >= (17*60)+15)) &&
             ((linear_time < (22*60)+45))
         ) {
+            if (!timeclock_on) {
+                ESP_LOGI(TAG, "Transition on.");
+                timeclock_on = true;
+                user_on_switch = true;
+            }
+        } else {
+            if (timeclock_on) {
+                ESP_LOGI(TAG, "Transition off.");
+                timeclock_on = false;
+                user_on_switch = false;
+            }
+        }
+
+        if (user_on_switch) {
             if (lightshow_state == LIGHTSHOW_STATE_SLEEP) {
                 lightshow_state = LIGHTSHOW_STATE_SLEEP_EXIT;
             }
@@ -322,16 +344,13 @@ static void heartbeat() {
         }
 
         // Respond to wand idle
-        if (lightshow_state == LIGHTSHOW_STATE_TRAINING && (now - last_active_timestamp) > 10000000) {
-            lightshow_state = LIGHTSHOW_STATE_IDLE;
-            ESP_LOGI(TAG, "Training session ends");
-            display_global_fade(GLOBE_MCAST_MASK|WREATH_MCAST_MASK, cmd_buf);
-        }
-        if (lightshow_state == LIGHTSHOW_STATE_SPELL_WAIT && (now - last_active_timestamp) > 5000000) {
-            lightshow_state = LIGHTSHOW_STATE_IDLE;
-            display_global_fade(GLOBE_MCAST_MASK|WREATH_MCAST_MASK, cmd_buf);
-        } else if ((now - last_active_timestamp) > 10000000) {
+        if ((now - last_active_timestamp) > 7500000) {
             wand_active_counter = 0;
+            if (lightshow_state == LIGHTSHOW_STATE_TRAINING) {
+                lightshow_state = LIGHTSHOW_STATE_IDLE;
+                ESP_LOGI(TAG, "Training session ends");
+                display_global_fade(GLOBE_MCAST_MASK|WREATH_MCAST_MASK, cmd_buf);
+            }
         }
 
         // Enforce current state
@@ -353,25 +372,28 @@ static void heartbeat() {
             ESP_LOGI(TAG, "Training session begins");
             lightshow_state = LIGHTSHOW_STATE_TRAINING;
             display_training_enter(GLOBE_MCAST_MASK, cmd_buf);
-            notify_wand_activity("training");
+            // notify_wand_activity("training");
         }  else if (lightshow_state == LIGHTSHOW_STATE_SPELL_BLOCK) {
             if ((now - spell_block_start_time) > 5000000) {
-                lightshow_state = LIGHTSHOW_STATE_SPELL_WAIT;
+                lightshow_state = LIGHTSHOW_STATE_IDLE;
+                wand_active_counter = 0;
             }
         }  else if (lightshow_state == LIGHTSHOW_STATE_SPELL_FULFILL) {
             display_spell(GLOBE_MCAST_MASK|WREATH_MCAST_MASK, cmd_buf, pending_spell);
             lightshow_state = LIGHTSHOW_STATE_SPELL_BLOCK;
             spell_block_start_time = now;
-            notify_wand_activity(pending_spell);
+            // notify_wand_activity(pending_spell);
         }  else if (lightshow_state == LIGHTSHOW_STATE_SLEEP_ENTER) {
             display_global_fade(GLOBE_MCAST_MASK|WREATH_MCAST_MASK, cmd_buf);
-            set_wand_decorations_active(false);
-            lightshow_state = LIGHTSHOW_STATE_SLEEP;
+            if (set_wand_decorations_active(false) == ESP_OK) {
+                lightshow_state = LIGHTSHOW_STATE_SLEEP;
+            }
         } else if (lightshow_state == LIGHTSHOW_STATE_SLEEP) {
             display_blank(GLOBE_MCAST_MASK|WREATH_MCAST_MASK, cmd_buf);
         } else if (lightshow_state == LIGHTSHOW_STATE_SLEEP_EXIT) {
-            set_wand_decorations_active(true);
-            lightshow_state = LIGHTSHOW_STATE_IDLE;
+            if (set_wand_decorations_active(true) == ESP_OK) {
+                lightshow_state = LIGHTSHOW_STATE_IDLE;
+            }
         }
     }
 }
@@ -401,6 +423,11 @@ static void handle_ip_stack_ready(void* handler_arg, esp_event_base_t base, int3
     } 
 }
 
+static void handle_set_user_on(void* handler_arg, esp_event_base_t base, int32_t id, void* event_data)
+{
+    user_on_switch = *((bool *)event_data);
+}
+
 void start_control_loop(void)
 {
     esp_event_loop_args_t wandc_loop_args = {
@@ -420,4 +447,5 @@ void start_control_loop(void)
         MALLOC_CAP_8BIT|MALLOC_CAP_SPIRAM
     );
     esp_event_handler_register_with(wandc_loop, WANDC_EVENT_BASE, WANDC_EVENT_WAND_EVENT, handle_wand_event, wand_status_cmd_buf);
+    esp_event_handler_register_with(wandc_loop, WANDC_EVENT_BASE, WANDC_SET_USER_ON, handle_set_user_on, NULL);
 }

@@ -94,7 +94,8 @@
         "task.h": "c",
         "control.h": "c",
         "esp_event.h": "c",
-        "esp_netif_sntp.h": "c"
+        "esp_netif_sntp.h": "c",
+        "detector.h": "c"
     },
     "idf.port": "/dev/ttyACM0",
     "idf.flashType": "UART"

@@ -82,15 +82,15 @@ static JPEGDEC jpeg;
 
 #define FINAL_IMAGE_SIZE 40*29
 
-#define RAW_FRAMES_SIZE 100
+#define RAW_FRAMES_SIZE 50
 #define FILTER_QUEUE_SIZE 3
 #define VELOCITY_QUEUE_SIZE 5
 #define FRAME_QUEUE_HW_MARK 2
 #define IDLE_FRAME_COUNT 15
 #define LOSER_BIN_BINSIZE 32
 #define MIN_IMAGE_BIN_COVERAGE 5
-#define LOSER_BIN_THRESHOLD 5
-#define LOSER_BIN_LIFETIME_SECONDS 2
+#define LOSER_BIN_THRESHOLD 10
+#define LOSER_BIN_LIFETIME_SECONDS 1
 
 typedef enum {
     IDLE,
@@ -129,6 +129,11 @@ vector<string> action_labels = {
   "gonadium",
   "discard",
   "discard"
+};
+
+// 220, 64
+std::vector<Rect> ignore_regions = {
+    Rect(Point(0,0), Point(100, 300))
 };
 
 deque<vector<Point>> detect_queue;
@@ -447,7 +452,7 @@ void handle_incoming_frame(vector<Point> frame) {
             loser_bin.force_add(path_point_queue.back());
         }
 
-        if (filter_state == ACTIVE || filter_state == DWELL) {
+        if (filter_state == ACTIVE) {
             wand_event_data.kind = WAND_EVENT_MOVEMENT;
             wand_event_data.xy[0] = velocity_queue.back().x;
             wand_event_data.xy[1] = velocity_queue.back().y;
@@ -483,8 +488,6 @@ typedef struct {
 
 int drawMCUs(JPEGDRAW *pDraw)
 {
-    static uint8_t prev_min = 0;
-    uint8_t current_min = 255;
     uint8_t *pIn = (uint8_t *)pDraw->pPixels;
     user_data_t *user = (user_data_t *)pDraw->pUser;
     uint8_t pixel;
@@ -492,7 +495,6 @@ int drawMCUs(JPEGDRAW *pDraw)
     int top = pDraw->y * user->width;
     int bottom = top + (pDraw->iHeight * user->width);
 
-    uint8_t thres = prev_min + 2;
     for (int y = top; y < bottom; y+=user->width) {
         // for (int x = 0; x < pDraw->iWidth; x++) {
         //     pixel = (pIn[x] > 2 ? 255 : 0);
@@ -503,13 +505,19 @@ int drawMCUs(JPEGDRAW *pDraw)
         //     }
         // }
         for (int x = 0; x < pDraw->iWidth; x++) {
-            if (pIn[x] < current_min) {
-                current_min = pIn[x];
-            }
-            pixel = (pIn[x] > thres ? 255 : 0);
+            pixel = (pIn[x] > 2 ? 255 : 0);
             if (pixel == 0) {
                 if (user->zero_points.size() < 512) {
-                    user->zero_points.push_back(Point(pDraw->x + x, y/user->width));
+                    bool blocked = false;
+                    Point newpt(pDraw->x + x, y/user->width);
+                    for (auto it = ignore_regions.begin(); it != ignore_regions.end(); it++) {
+                        if (it->contains(newpt)) {
+                            blocked = true;
+                        }
+                    }
+                    if (!blocked) {
+                        user->zero_points.push_back(newpt);
+                    }
                 }
             }
         }
@@ -726,9 +734,9 @@ extern "C" void camera_task(void *params) {
 
 
     // IR LED Stuff
-    ir_ledc_init();
-    ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, LEDC_DUTY));
-    ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
+    // ir_ledc_init();
+    // ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, LEDC_DUTY));
+    // ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
     // END IR LED
 
 

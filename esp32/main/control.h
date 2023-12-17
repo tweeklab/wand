@@ -19,8 +19,7 @@ typedef enum {
     LIGHTSHOW_STATE_TRAINING_ENTER,
     LIGHTSHOW_STATE_TRAINING,
     LIGHTSHOW_STATE_SPELL_FULFILL,
-    LIGHTSHOW_STATE_SPELL_BLOCK,
-    LIGHTSHOW_STATE_SPELL_WAIT
+    LIGHTSHOW_STATE_SPELL_BLOCK
 } lightshow_state_t;
 
 typedef enum {
@@ -39,7 +38,8 @@ typedef struct {
 typedef enum {
     WANDC_EVENT_IP_STACK_READY,
     WANDC_EVENT_IR_ARRAY_CONFIG,
-    WANDC_EVENT_WAND_EVENT
+    WANDC_EVENT_WAND_EVENT,
+    WANDC_SET_USER_ON
 } control_event_t;
 
 void start_control_loop(void);

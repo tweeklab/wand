@@ -12,6 +12,7 @@
 
 #include "ui_server.h"
 #include "detector.h"
+#include "control.h"
 
 #define POINT_MSGBUF_SIZE (10*1024)
 
@@ -233,6 +234,15 @@ static esp_err_t control_handler(httpd_req_t *req)
             return ret;
         }
         ESP_LOGI(TAG, "Got packet with message: %s", ws_pkt.payload);
+        bool on = true;
+        esp_event_post_to(
+            wandc_loop,
+            WANDC_EVENT_BASE,
+            WANDC_SET_USER_ON,
+            &on,
+            sizeof(bool),
+            portTICK_PERIOD_MS
+        );
     } 
     return ret;
 }
