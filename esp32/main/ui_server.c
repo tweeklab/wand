@@ -234,15 +234,51 @@ static esp_err_t control_handler(httpd_req_t *req)
             return ret;
         }
         ESP_LOGI(TAG, "Got packet with message: %s", ws_pkt.payload);
-        bool on = true;
-        esp_event_post_to(
-            wandc_loop,
-            WANDC_EVENT_BASE,
-            WANDC_SET_USER_ON,
-            &on,
-            sizeof(bool),
-            portTICK_PERIOD_MS
-        );
+
+        if (!strncmp((const char *)ws_pkt.payload, "show_on", strlen("show_on"))) {
+            bool on = true;
+            esp_event_post_to(
+                wandc_loop,
+                WANDC_EVENT_BASE,
+                WANDC_SET_USER_ON,
+                &on,
+                sizeof(bool),
+                portTICK_PERIOD_MS
+            );
+        } else if (!strncmp((const char *)ws_pkt.payload, "show_off", strlen("show_off"))) {
+            bool on = false;
+            esp_event_post_to(
+                wandc_loop,
+                WANDC_EVENT_BASE,
+                WANDC_SET_USER_ON,
+                &on,
+                sizeof(bool),
+                portTICK_PERIOD_MS
+            );
+        } else if (!strncmp((const char *)ws_pkt.payload, "ir_led_on", strlen("ir_led_on"))) {
+            bool on = true;
+            esp_event_post_to(
+                wandc_loop,
+                WANDC_EVENT_BASE,
+                WANDC_SET_IR_LED_ON,
+                &on,
+                sizeof(bool),
+                portTICK_PERIOD_MS
+            );
+        } else if (!strncmp((const char *)ws_pkt.payload, "ir_led_off", strlen("ir_led_off"))) {
+            bool on = false;
+            esp_event_post_to(
+                wandc_loop,
+                WANDC_EVENT_BASE,
+                WANDC_SET_IR_LED_ON,
+                &on,
+                sizeof(bool),
+                portTICK_PERIOD_MS
+            );
+        } else {
+            ESP_LOGI(TAG, "Unhandled command: %s", ws_pkt.payload);
+        }
+
     } 
     return ret;
 }

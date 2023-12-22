@@ -14,6 +14,8 @@
 #include <netdb.h>
 #include <time.h>
 
+#include "driver/ledc.h"
+
 #define NUM_IDLE_STATES 4
 #define TIME_PER_IDLE_STATE_SECONDS 30
 #define CMD_BUF_BYTES 256
@@ -26,6 +28,18 @@ static char *mcast_addrs[] = {
 };
 #define GLOBE_MCAST_MASK (1<<GLOBE_MCAST_ADDR)
 #define WREATH_MCAST_MASK (1<<WREATH_MCAST_ADDR)
+
+// IR Array Configs
+// GPIO
+#define IR_LED_GPIO_NUM 1
+// LED PWM Config
+#define LEDC_TIMER              LEDC_TIMER_0
+#define LEDC_MODE               LEDC_LOW_SPEED_MODE
+#define LEDC_OUTPUT_IO          (IR_LED_GPIO_NUM) // Define the output GPIO
+#define LEDC_CHANNEL            LEDC_CHANNEL_0
+#define LEDC_DUTY_RES           LEDC_TIMER_13_BIT // Set duty resolution to 13 bits
+#define LEDC_DUTY               (8191) // Set duty to 50%. ((2 ** 13) - 1) * 50% = 4095
+#define LEDC_FREQUENCY          (5000) // Frequency in Hertz. Set frequency at 5 kHz
 
 static const char *TAG = "wand control";
 static bool has_ip = false;
@@ -428,6 +442,44 @@ static void handle_set_user_on(void* handler_arg, esp_event_base_t base, int32_t
     user_on_switch = *((bool *)event_data);
 }
 
+static void handle_set_ir_led_on(void* handler_arg, esp_event_base_t base, int32_t id, void* event_data)
+{
+    bool led_on = *((bool *)event_data);
+    ESP_LOGI(TAG, "IR LED ON: %d", led_on);
+    if (led_on) {
+        ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, LEDC_DUTY));
+        ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
+    } else {
+        ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, 0));
+        ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
+    }
+}
+
+void ir_ledc_init(void)
+{
+    // Prepare and then apply the LEDC PWM timer configuration
+    ledc_timer_config_t ledc_timer = {
+        .speed_mode       = LEDC_MODE,
+        .duty_resolution  = LEDC_DUTY_RES,
+        .timer_num        = LEDC_TIMER,
+        .freq_hz          = LEDC_FREQUENCY,  // Set output frequency at 5 kHz
+        .clk_cfg          = LEDC_AUTO_CLK
+    };
+    ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer));
+
+    // Prepare and then apply the LEDC PWM channel configuration
+    ledc_channel_config_t ledc_channel = {
+        .gpio_num       = LEDC_OUTPUT_IO,
+        .speed_mode     = LEDC_MODE,
+        .channel        = LEDC_CHANNEL,
+        .intr_type      = LEDC_INTR_DISABLE,
+        .timer_sel      = LEDC_TIMER,
+        .duty           = 0, // Set duty to 0%
+        .hpoint         = 0
+    };
+    ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel));
+}
+
 void start_control_loop(void)
 {
     esp_event_loop_args_t wandc_loop_args = {
@@ -448,4 +500,7 @@ void start_control_loop(void)
     );
     esp_event_handler_register_with(wandc_loop, WANDC_EVENT_BASE, WANDC_EVENT_WAND_EVENT, handle_wand_event, wand_status_cmd_buf);
     esp_event_handler_register_with(wandc_loop, WANDC_EVENT_BASE, WANDC_SET_USER_ON, handle_set_user_on, NULL);
+    esp_event_handler_register_with(wandc_loop, WANDC_EVENT_BASE, WANDC_SET_IR_LED_ON, handle_set_ir_led_on, NULL);
+
+    ir_ledc_init();
 }

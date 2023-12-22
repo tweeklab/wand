@@ -56,7 +56,14 @@
         <div>
             <p style="font-size: 20pt">Spell: <span id="label">NA</span> (<span id="prob">0</span>)</p>
             <p>Filter State: <span id="filter_state">NA</span> Frame: <span id="frame">NA</span> Velocity: <span id="velocity">NA</span></p>
-            <p><button id="button" class="button">Reset</button></p>
+            <p>
+                <button id="show_on_button" class="button">Show On</button>
+                <button id="show_off_button" class="button">Show Off</button>
+            </p>
+            <p>
+                <button id="ir_led_on_button" class="button">IR LED On</button>
+                <button id="ir_led_off_button" class="button">IR LED Off</button>
+            </p>
         </div>
         <div style="display: flex">
             <div  style="flex: 1">
@@ -89,6 +96,7 @@
         var video_monitor = document.getElementById("video_monitor");
         var video_monitor_togggle = document.getElementById("toggle_enable_video");
 
+        var ignored_regions = [];
 
         video_monitor_togggle.onchange = function(event) {
             if (event.target.checked) {
@@ -139,20 +147,40 @@
                     centers_ctx.arc(point[0], point[1], 2, 0, 2 * Math.PI);
                     centers_ctx.fill();
                 }
+                for (r of ignored_regions) {
+                    centers_ctx.beginPath();
+                    // rgba(235, 225, 52, .3)
+                    centers_ctx.fillStyle = "rgba(200, 0, 0, .15)";
+                    centers_ctx.fillRect(r[0], r[1], r[2], r[3]); 
+                }
             } else if (data.type == "status") {
                 document.getElementById('filter_state').innerHTML = data.filter_state;
                 document.getElementById('frame').innerHTML = data.frame;
                 document.getElementById('velocity').innerHTML = data.velocity;
+            } else if (data.type == "ignored") {
+                ignored_regions = data.rects;
             }
         }
 
         function initButton() {
-            document.getElementById('button').addEventListener('click', reset);
+            document.getElementById('show_on_button').addEventListener('click', show_on);
+            document.getElementById('show_off_button').addEventListener('click', show_off);
+            document.getElementById('ir_led_on_button').addEventListener('click', ir_led_on);
+            document.getElementById('ir_led_off_button').addEventListener('click', ir_led_off);
         }
-        function reset(){
-            console.log("Reset count")
-            control_websocket.send('reset');
+        function show_on(){
+            control_websocket.send('show_on');
         }
+        function show_off(){
+            control_websocket.send('show_off');
+        }
+        function ir_led_on(){
+            control_websocket.send('ir_led_on');
+        }
+        function ir_led_off(){
+            control_websocket.send('ir_led_off');
+        }
+
 
         // Initial start
         window.addEventListener('load', onLoad);

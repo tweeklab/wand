@@ -8,7 +8,6 @@
 #include "esp_camera.h"
 #include "esp_timer.h"
 #include "esp_log.h"
-#include "driver/ledc.h"
 
 #include <sys/socket.h>
 #include <netdb.h>
@@ -52,18 +51,6 @@ using namespace std;
 #define VSYNC_GPIO_NUM    41
 #define HREF_GPIO_NUM     48
 #define PCLK_GPIO_NUM     11
-
-// IR Array Configs
-// GPIO
-#define IR_LED_GPIO_NUM 1
-// LED PWM Config
-#define LEDC_TIMER              LEDC_TIMER_0
-#define LEDC_MODE               LEDC_LOW_SPEED_MODE
-#define LEDC_OUTPUT_IO          (IR_LED_GPIO_NUM) // Define the output GPIO
-#define LEDC_CHANNEL            LEDC_CHANNEL_0
-#define LEDC_DUTY_RES           LEDC_TIMER_13_BIT // Set duty resolution to 13 bits
-#define LEDC_DUTY               (8191) // Set duty to 50%. ((2 ** 13) - 1) * 50% = 4095
-#define LEDC_FREQUENCY          (5000) // Frequency in Hertz. Set frequency at 5 kHz
 
 static const char *TAG = "wand detector";
 
@@ -589,33 +576,6 @@ void draw_line(uint8_t *buf, int x0, int y0, int x1, int y1) {
     }
 }
 
-
-void ir_ledc_init(void)
-{
-    // Prepare and then apply the LEDC PWM timer configuration
-    ledc_timer_config_t ledc_timer = {
-        .speed_mode       = LEDC_MODE,
-        .duty_resolution  = LEDC_DUTY_RES,
-        .timer_num        = LEDC_TIMER,
-        .freq_hz          = LEDC_FREQUENCY,  // Set output frequency at 5 kHz
-        .clk_cfg          = LEDC_AUTO_CLK
-    };
-    ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer));
-
-    // Prepare and then apply the LEDC PWM channel configuration
-    ledc_channel_config_t ledc_channel = {
-        .gpio_num       = LEDC_OUTPUT_IO,
-        .speed_mode     = LEDC_MODE,
-        .channel        = LEDC_CHANNEL,
-        .intr_type      = LEDC_INTR_DISABLE,
-        .timer_sel      = LEDC_TIMER,
-        .duty           = 0, // Set duty to 0%
-        .hpoint         = 0
-    };
-    ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel));
-}
-
-
 extern "C" void inference_task(void *params)
 {
     model = tflite::GetModel(model_tflite);
@@ -732,14 +692,6 @@ extern "C" void camera_task(void *params) {
     s->set_hmirror(s, 1);
     s->set_special_effect(s, 1);
 
-
-    // IR LED Stuff
-    // ir_ledc_init();
-    // ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, LEDC_DUTY));
-    // ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
-    // END IR LED
-
-
     // JSON messages sent to the web ui
     status_data = (char *)heap_caps_malloc(POINT_DATA_BUFLEN, (MALLOC_CAP_8BIT|MALLOC_CAP_SPIRAM));
     // Final drawn image shown to the model
@@ -817,6 +769,18 @@ extern "C" void camera_task(void *params) {
                         status_len += snprintf((char *)status_data+status_len, POINT_DATA_BUFLEN-status_len, ",");
                     }
                     status_len += snprintf((char *)status_data+status_len, POINT_DATA_BUFLEN-status_len, "[%d, %d, %s]", it->x, it->y, (loser_bin.contains(*it) ? "true" : "false"));
+                }
+                status_len += snprintf((char *)status_data+status_len, POINT_DATA_BUFLEN-status_len, "]}\n");
+                xMessageBufferSend(point_msgbuf_handle, status_data, status_len+1, 0);
+
+                status_len = 0;
+                status_len = snprintf((char *)status_data+status_len, POINT_DATA_BUFLEN-status_len,
+                                        "{ \"type\": \"ignored\", \"rects\": [");
+                for (auto it = ignore_regions.begin(); it != ignore_regions.end(); it++) {
+                    if (it != ignore_regions.begin()) {
+                        status_len += snprintf((char *)status_data+status_len, POINT_DATA_BUFLEN-status_len, ",");
+                    }
+                    status_len += snprintf((char *)status_data+status_len, POINT_DATA_BUFLEN-status_len, "[%d, %d, %d, %d]", it->tl.x, it->tl.y, it->br.x, it->br.y);
                 }
                 status_len += snprintf((char *)status_data+status_len, POINT_DATA_BUFLEN-status_len, "]}\n");
                 xMessageBufferSend(point_msgbuf_handle, status_data, status_len+1, 0);
