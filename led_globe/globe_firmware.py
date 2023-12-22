@@ -107,7 +107,8 @@ def fade(sm, *args):
         time.sleep_ms(30)
 
 def chase(sm, *args):
-    HUE = 30
+    # HUE = 30
+    HUE = random.randint(0, 359)
     SAT = .5
     MIN_VAL = 40
     MAX_VAL = 255
@@ -132,6 +133,17 @@ def chase(sm, *args):
                 trailing_hue += 1
         pixels_show(sm)
 
+def continuous_chase(sm, *args):
+    while not abort_flag:
+        chase(sm)
+        if abort_flag:
+            return
+        time_to_wait = random.randint(500, 1500)
+        while time_to_wait > 0:
+            if abort_flag:
+                break
+            time.sleep_ms(10)
+            time_to_wait -= 10
 
 def candycane_wreath(sm, *args):
     pixels_fill((0,0,0))
@@ -189,15 +201,19 @@ def global_fade_out(sm, rate, *args):
     global_dimming = save_global_dimming
 
 def wreath_render_wand_point(sm, *args):
-    x = int(args[0])
-    y = int(args[1])
-    if (y < 150):
-        color = HSV2RGB(120, 1, .4)
-    else:
-        color = HSV2RGB(0, 1, .4)
+    # x = int(args[0])
+    # y = int(args[1])
+    # if (y < 150):
+    #     color = HSV2RGB(120, 1, .4)
+    # else:
+    #     color = HSV2RGB(0, 1, .4)
+
+    # for led_i in range(get_config('real_num_leds')):
+    #     pixels_set(led_i, color)
+    # pixels_show(sm)
 
     for led_i in range(get_config('real_num_leds')):
-        pixels_set(led_i, color)
+        pixels_set(led_i, HSV2RGB(60, 1, .3))
     pixels_show(sm)
 
 def sethsv(sm, *args):
@@ -207,7 +223,7 @@ def sethsv(sm, *args):
     pixels_fill((r,g,b))
     pixels_show(sm)
 
-def fade_sat(sm, hsv, reverse=False):
+def fade_sat(sm, hsv, reverse=False, invert=False):
     step_count = int((20 * (get_config('normalized_num_leds')/get_config('real_num_leds'))))
     if abort_flag:
         return
@@ -217,7 +233,10 @@ def fade_sat(sm, hsv, reverse=False):
         s_vals = reversed([s_step*i for i in range(step_count+1)])
     else:
         s_vals = [s_step*i for i in range(step_count+1)]
-    shades = [HSV2RGB(h, s_val, v) for s_val in s_vals]
+    if invert:
+        shades = [HSV2RGB(h, 1-s_val, v) for s_val in s_vals]
+    else:
+        shades = [HSV2RGB(h, s_val, v) for s_val in s_vals]
     for shade in shades:
         if abort_flag:
             break
@@ -264,6 +283,29 @@ def christmas_color_cycle(sm):
             waited += wait_per_iter
         fade_sat(sm, color, reverse=True)
 
+def christmas_color_cycle2(sm):
+    time.sleep_ms(random.randint(500,2500))
+    colors = [
+        (0, .5, .3),
+        (120, .5, .3),
+        (240, .5, .3),
+        (58, .5, .3),
+        (29, .5, .3),
+    ]
+    while not abort_flag:
+        color = random.choice(colors)
+        if abort_flag:
+            break
+        fade_sat(sm, color, reverse=False, invert=True)
+        waited = 0
+        wait_per_iter = 500
+        while waited < 3000:
+            if abort_flag:
+                break
+            time.sleep_ms(wait_per_iter)
+            waited += wait_per_iter
+        fade_sat(sm, color, reverse=True, invert=True)
+
 def hot_potato(sm, max_logical_id, expanded_potato_colors=False):
     clear_intra_commands()
     my_id = get_config('logical_device_id')
@@ -290,7 +332,7 @@ def hot_potato(sm, max_logical_id, expanded_potato_colors=False):
         pixels_show(sm)
         has_potato = False
 
-    potato_color = random.choice(potato_colors)
+    color_idx = random.randint(0, len(potato_colors)-1)
     while not abort_flag:
         if has_potato:
             if my_id == int(max_logical_id):
@@ -301,12 +343,12 @@ def hot_potato(sm, max_logical_id, expanded_potato_colors=False):
             msg_data = {
                 'baton': 'hot_potato',
                 'id': msg_id,
-                'dest': [next_id]
+                'dest': [next_id],
+                'color': (color_idx+1) % len(potato_colors)
             }
             push_out_command(msg_data)
             has_potato = False
-            fade_sat(sm, potato_color, reverse=True)
-            potato_color = random.choice(potato_colors)
+            fade_sat(sm, potato_colors[color_idx], reverse=True)
 
         cmd = pop_intra_command()
         if not cmd:
@@ -316,7 +358,11 @@ def hot_potato(sm, max_logical_id, expanded_potato_colors=False):
         if cmd.get('baton') != 'hot_potato':
             print("unknown baton.  dropping!")
         has_potato = True
-        fade_sat(sm, potato_color, reverse=False)
+        if is_head:
+            color_idx = random.randint(0, len(potato_colors)-1)
+        else:
+            color_idx = cmd.get('color')
+        fade_sat(sm, potato_colors[color_idx], reverse=False)
 
 def naughty_or_nice(sm):
     clear_intra_commands()
@@ -340,7 +386,7 @@ def naughty_or_nice(sm):
         reverse = not reverse
 
     if is_head:
-        is_naughty = random.choice([True] + [False] * 4)
+        is_naughty = random.choice([True] + [False] * 9)
         msg_id = time.time_ns()
         msg_data = {
             'baton': 'naughty_or_nice',
@@ -373,12 +419,14 @@ ROUTINES = {
     'sparkle': sparkle,
     'fade': fade,
     'chase': chase,
+    'continuous_chase': continuous_chase,
     'candycane_wreath': candycane_wreath,
     'candycane_sphere': candycane_sphere,
     'global_fade_out': global_fade_out,
     'wreath_render_wand_point': wreath_render_wand_point,
     'sethsv': sethsv,
     'christmas_color_cycle': christmas_color_cycle,
+    'christmas_color_cycle2': christmas_color_cycle2,
     'hot_potato': hot_potato
 }
 

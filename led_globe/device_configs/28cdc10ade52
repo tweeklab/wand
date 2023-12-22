@@ -5,8 +5,8 @@
   "mcast_group": "239.1.1.1",
   "logical_device_id": 1,
   "idle_states": [
-    {"action": "effect", "args": ["hot_potato", "7"]},
-    {"action": "effect", "args": ["christmas_color_cycle"]},
+    {"action": "effect", "args": ["continuous_chase"]},
+    {"action": "effect", "args": ["christmas_color_cycle2"]},
     {"action": "effect", "args": ["hot_potato", "7", true]},
     {"action": "effect", "args": ["candycane_sphere"]}
   ]
