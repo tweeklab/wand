@@ -386,7 +386,7 @@ def naughty_or_nice(sm):
         reverse = not reverse
 
     if is_head:
-        is_naughty = random.choice([True] + [False] * 9)
+        is_naughty = random.choice([True] + [False] * 19)
         msg_id = time.time_ns()
         msg_data = {
             'baton': 'naughty_or_nice',
